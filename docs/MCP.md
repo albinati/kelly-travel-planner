@@ -2,6 +2,8 @@
 
 Kelly exposes a **stdio** MCP server: `kelly-mcp` (after `poetry install --extras mcp`).
 
+**Running OpenClaw on a VPS?** See [OPENCLAW-VPS.md](OPENCLAW-VPS.md) for clone, Poetry, absolute paths, `openclaw.json` example, and a **`curl | bash` installer** ([`scripts/install-openclaw-kelly.sh`](../scripts/install-openclaw-kelly.sh)) that mirrors OpenClaw-style one-liner installs.
+
 ## OpenClaw (default)
 
 Use your OpenClaw MCP flow to add a command that runs Kelly from this repo, for example:
