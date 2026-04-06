@@ -1,0 +1,43 @@
+[tool.poetry]
+name = "kelly"
+version = "0.1.0"
+description = "Travel-hacking assistant: Duffel + Seats.aero, Markdown config, local SQLite history, MCP (OpenClaw-friendly)."
+readme = "README.md"
+authors = ["Kelly contributors"]
+packages = [{ include = "kelly", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+duffel-api = "^0.6.2"
+httpx = "^0.28.0"
+pydantic = "^2.12"
+pyyaml = "^6.0"
+python-frontmatter = "^1.1"
+typer = "^0.24.0"
+python-dotenv = "^1.2"
+mcp = { version = "^1.27", optional = true }
+statsmodels = { version = "^0.14", optional = true }
+
+[tool.poetry.extras]
+mcp = ["mcp"]
+analytics = ["statsmodels"]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+ruff = "^0.9.0"
+
+[tool.poetry.scripts]
+kelly = "kelly.cli:main"
+kelly-mcp = "kelly.mcp_server:main"
+
+[build-system]
+requires = ["poetry-core>=2.0,<3"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
