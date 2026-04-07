@@ -20,7 +20,7 @@ def test_sqlite_roundtrip(tmp_path) -> None:
             best_award_miles=None,
             award_program=None,
             award_taxes_cents=None,
-            source_cash="duffel",
+            source_cash="serpapi",
             source_award=None,
             watchlist_row_id="t1",
             raw_json=None,

@@ -14,7 +14,7 @@ from kelly.analytics import (
     label_miles_vs_history,
     phase1_forecast_hint,
 )
-from kelly.duffel_client import CashSearchResult, search_cash_best
+from kelly.serpapi_client import CashSearchResult, search_cash_best
 from kelly.history_store import (
     HistoryStore,
     Observation,
@@ -22,7 +22,7 @@ from kelly.history_store import (
     days_before_departure,
     route_key,
 )
-from kelly.md_config import KellyConfig, passengers_for_duffel
+from kelly.md_config import KellyConfig, passengers_for_cash
 from kelly.seats_aero_client import AwardSearchResult, search_cached
 from kelly.toolkit_data import ToolkitData, worth_summary
 
@@ -69,33 +69,34 @@ def _float_or_none(d: Decimal | None) -> float | None:
 def scan_planned_watchlist(
     cfg: KellyConfig,
     *,
-    duffel_token: str | None,
+    serpapi_key: str | None,
     seats_key: str | None,
     store: HistoryStore | None,
     toolkit: ToolkitData | None,
     persist: bool = True,
 ) -> list[ScanRowResult]:
-    """Run Duffel + Seats.aero for each planned row and departure sample."""
-    pax = passengers_for_duffel(cfg)
+    """Run SerpApi (Google Flights) + Seats.aero for each planned row and departure sample."""
     window = cfg.frontmatter.history_window_days
     max_dates = cfg.frontmatter.max_dates_per_watch_row
     results: list[ScanRowResult] = []
     tk = toolkit or ToolkitData(None)
 
     for row in cfg.planned:
+        pax = passengers_for_cash(cfg, passenger_ids_override=row.passenger_ids)
         for dep in iter_departure_dates(row.date_start, row.date_end, max_dates):
             rk = route_key(row.origin_iata, row.destination_iata, row.cabin, dep)
             d_before = days_before_departure(dep)
 
             cash_res: CashSearchResult | None = None
-            if duffel_token and pax:
+            if serpapi_key and pax:
                 cash_res = search_cash_best(
-                    duffel_token,
+                    serpapi_key,
                     origin_iata=row.origin_iata,
                     destination_iata=row.destination_iata,
                     departure_date=dep,
                     cabin=row.cabin,
                     passengers=pax,
+                    currency=cfg.frontmatter.currency,
                 )
 
             award_res: AwardSearchResult | None = None
@@ -156,7 +157,7 @@ def scan_planned_watchlist(
                     best_award_miles=award_res.best_miles if award_res else None,
                     award_program=award_res.best_source if award_res else None,
                     award_taxes_cents=None,
-                    source_cash="duffel" if cash_res and not cash_res.error else None,
+                    source_cash="serpapi" if cash_res and not cash_res.error else None,
                     source_award="seats_aero" if award_res and not award_res.error else None,
                     watchlist_row_id=row.id,
                     raw_json=None,
@@ -207,6 +208,7 @@ def scan_row_to_jsonable(r: ScanRowResult) -> dict[str, Any]:
             "best_offer_id": r.cash.best_offer_id,
             "offer_count": r.cash.offer_count,
             "error": r.cash.error,
+            "itinerary_details": r.cash.itinerary_details,
         }
     if r.awards:
         out["awards"] = {
@@ -265,7 +267,7 @@ def open_default_store() -> SqliteHistoryStore:
 def scan_opportunities(
     cfg: KellyConfig,
     *,
-    duffel_token: str | None,
+    serpapi_key: str | None,
     seats_key: str | None,
     store: HistoryStore | None,
     toolkit: ToolkitData | None,
@@ -274,13 +276,13 @@ def scan_opportunities(
     max_dates_per_pair: int = 3,
 ) -> list[ScanRowResult]:
     """Broad wishlist scans: Cartesian sample of airports (capped) × date samples (capped)."""
-    pax = passengers_for_duffel(cfg)
     window = cfg.frontmatter.history_window_days
     results: list[ScanRowResult] = []
     tk = toolkit or ToolkitData(None)
     pair_budget = max_origin_dest_pairs
 
     for opp in cfg.opportunities:
+        pax = passengers_for_cash(cfg, passenger_ids_override=opp.passenger_ids)
         origins = [x.strip().upper() for x in opp.origin_airports.split(",") if x.strip()]
         dests = [x.strip().upper() for x in opp.destination_airports.split(",") if x.strip()]
         for o in origins:
@@ -297,14 +299,15 @@ def scan_opportunities(
                     d_before = days_before_departure(dep)
 
                     cash_res = None
-                    if duffel_token and pax:
+                    if serpapi_key and pax:
                         cash_res = search_cash_best(
-                            duffel_token,
+                            serpapi_key,
                             origin_iata=o,
                             destination_iata=d,
                             departure_date=dep,
                             cabin=opp.cabin,
                             passengers=pax,
+                            currency=cfg.frontmatter.currency,
                         )
 
                     award_res = None
@@ -364,7 +367,7 @@ def scan_opportunities(
                                 best_award_miles=award_res.best_miles if award_res else None,
                                 award_program=award_res.best_source if award_res else None,
                                 award_taxes_cents=None,
-                                source_cash="duffel" if cash_res and not cash_res.error else None,
+                                source_cash="serpapi" if cash_res and not cash_res.error else None,
                                 source_award="seats_aero" if award_res and not award_res.error else None,
                                 watchlist_row_id=f"opp:{opp.id}",
                                 raw_json=None,
