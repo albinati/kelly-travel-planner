@@ -13,6 +13,33 @@ def test_parse_simple_table() -> None:
     assert rows == [{"a": "1", "b": "2"}]
 
 
+def test_planned_row_passenger_ids_override(tmp_path: Path) -> None:
+    md = """---
+currency: USD
+default_passenger_ids: [p1]
+---
+## Passengers
+| id | label | type |
+| --- | --- | --- |
+| p1 | A | adult |
+| p2 | B | child |
+## Planned watchlist
+| id | origin_iata | destination_iata | date_start | date_end | cabin | passenger_ids | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| r1 | JFK | LIS | 2026-07-01 | 2026-07-02 | economy | p2 | x |
+"""
+    p = tmp_path / "k.md"
+    p.write_text(md, encoding="utf-8")
+    from kelly.md_config import passengers_for_cash
+
+    cfg = load_kelly_config(p)
+    assert passengers_for_cash(cfg) == [{"type": "adult"}]
+    row = next(r for r in cfg.planned if r.id == "r1")
+    assert passengers_for_cash(cfg, passenger_ids_override=row.passenger_ids) == [
+        {"type": "child"},
+    ]
+
+
 def test_load_example_config(tmp_path: Path) -> None:
     src = Path(__file__).resolve().parents[1] / "config" / "kelly.example.md"
     cfg = load_kelly_config(src)

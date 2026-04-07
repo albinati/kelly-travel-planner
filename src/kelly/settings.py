@@ -14,13 +14,8 @@ def _path(name: str, default: str) -> Path:
     return Path(os.environ.get(name, default)).expanduser()
 
 
-def duffel_token() -> str | None:
-    return os.environ.get("DUFFEL_ACCESS_TOKEN") or os.environ.get("DUFFEL_API_KEY")
-
-
-def duffel_api_version() -> str:
-    """Duffel-Version header; v1 was retired — duffel-api defaults to v1 if not overridden."""
-    return os.environ.get("DUFFEL_API_VERSION", "v2").strip() or "v2"
+def serpapi_api_key() -> str | None:
+    return os.environ.get("SERPAPI_API_KEY")
 
 
 def seats_aero_key() -> str | None:

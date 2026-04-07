@@ -20,8 +20,8 @@ from kelly.orchestrator import (
 )
 from kelly.settings import (
     config_path,
-    duffel_token,
     seats_aero_key,
+    serpapi_api_key,
     toolkit_data_dir,
 )
 from kelly.toolkit_data import ToolkitData
@@ -31,7 +31,7 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 @app.callback()
 def _main() -> None:
-    """Kelly — travel hacking from Markdown + Duffel + Seats.aero."""
+    """Kelly — travel hacking from Markdown + SerpApi + Seats.aero."""
 
 
 @app.command()
@@ -58,10 +58,10 @@ def scan_cmd(
         raise typer.Exit(code=1)
 
     cfg = load_kelly_config(path)
-    token = duffel_token()
+    token = serpapi_api_key()
     seats = seats_aero_key()
     if not token:
-        typer.echo("Warning: DUFFEL_ACCESS_TOKEN not set — skipping cash search.", err=True)
+        typer.echo("Warning: SERPAPI_API_KEY not set — skipping cash search.", err=True)
     if not seats:
         typer.echo("Warning: SEATS_AERO_API_KEY not set — skipping award search.", err=True)
 
@@ -70,7 +70,7 @@ def scan_cmd(
 
     rows = scan_planned_watchlist(
         cfg,
-        duffel_token=token,
+        serpapi_key=token,
         seats_key=seats,
         store=store,
         toolkit=toolkit,
@@ -104,11 +104,13 @@ def opportunities_cmd(
         typer.echo(f"Config not found: {path}", err=True)
         raise typer.Exit(code=1)
     cfg = load_kelly_config(path)
+    if not serpapi_api_key():
+        typer.echo("Warning: SERPAPI_API_KEY not set — skipping cash search.", err=True)
     store = None if no_persist else open_default_store()
     toolkit = ToolkitData(toolkit_data_dir())
     rows = scan_opportunities(
         cfg,
-        duffel_token=duffel_token(),
+        serpapi_key=serpapi_api_key(),
         seats_key=seats_aero_key(),
         store=store,
         toolkit=toolkit,

@@ -73,7 +73,7 @@ poetry run which kelly-mcp
 cp .env.example .env
 chmod 600 .env
 cp config/kelly.example.md config/kelly.md
-# edit .env: DUFFEL_ACCESS_TOKEN, SEATS_AERO_API_KEY
+# edit .env: SERPAPI_API_KEY, SEATS_AERO_API_KEY
 # edit config/kelly.md: passengers and watchlists
 ```
 
@@ -96,11 +96,11 @@ Example (adjust paths and match your OpenClaw schema if it differs):
         "command": "/opt/kelly-travel-planner/.venv/bin/kelly-mcp",
         "args": [],
         "cwd": "/opt/kelly-travel-planner",
-        "description": "Kelly travel hacking (Duffel + Seats.aero)",
+        "description": "Kelly travel hacking (SerpApi + Seats.aero)",
         "env": {
           "KELLY_CONFIG_PATH": "/opt/kelly-travel-planner/config/kelly.md",
           "KELLY_DATA_DIR": "/opt/kelly-travel-planner/data",
-          "DUFFEL_ACCESS_TOKEN": "paste-or-use-secret-manager",
+          "SERPAPI_API_KEY": "paste-or-use-secret-manager",
           "SEATS_AERO_API_KEY": "paste-or-use-secret-manager"
         }
       }

@@ -18,7 +18,10 @@ class PassengerRow(BaseModel):
 
     id: str = Field(..., description="Stable id, e.g. p1")
     label: str = ""
-    type: str = Field(default="adult", description="Duffel passenger type: adult, child, infant_without_seat")
+    type: str = Field(
+        default="adult",
+        description="Passenger type for cash search counts: adult, child, infant_without_seat",
+    )
 
 
 class PlannedWatchRow(BaseModel):
@@ -32,6 +35,10 @@ class PlannedWatchRow(BaseModel):
     cabin: str = "economy"
     target_price: float | None = None
     target_miles: int | None = None
+    passenger_ids: list[str] | None = Field(
+        default=None,
+        description="Comma-separated in MD; overrides frontmatter default_passenger_ids.",
+    )
     seats_aero_sources: str | None = Field(
         default=None,
         description="Comma-separated Seats.aero source ids, e.g. united,aeroplan",
@@ -52,6 +59,20 @@ class PlannedWatchRow(BaseModel):
             raise ValueError(f"cabin must be one of {allowed}, got {v!r}")
         return s
 
+    @field_validator("passenger_ids", mode="before")
+    @classmethod
+    def parse_passenger_ids(cls, v: object) -> list[str] | None:
+        if v is None:
+            return None
+        if isinstance(v, list):
+            out = [str(x).strip() for x in v if str(x).strip()]
+            return out or None
+        s = str(v).strip()
+        if not s:
+            return None
+        out = [p.strip() for p in s.split(",") if p.strip()]
+        return out or None
+
 
 class OpportunityRow(BaseModel):
     """Broader award/cash discovery rules (optional section)."""
@@ -64,6 +85,10 @@ class OpportunityRow(BaseModel):
     cabin: str = "economy"
     max_cash: float | None = None
     max_miles: int | None = None
+    passenger_ids: list[str] | None = Field(
+        default=None,
+        description="Comma-separated in MD; overrides frontmatter default_passenger_ids.",
+    )
     seats_aero_sources: str | None = None
     notes: str = ""
 
@@ -75,6 +100,20 @@ class OpportunityRow(BaseModel):
         if s not in allowed:
             raise ValueError(f"cabin must be one of {allowed}, got {v!r}")
         return s
+
+    @field_validator("passenger_ids", mode="before")
+    @classmethod
+    def parse_passenger_ids(cls, v: object) -> list[str] | None:
+        if v is None:
+            return None
+        if isinstance(v, list):
+            out = [str(x).strip() for x in v if str(x).strip()]
+            return out or None
+        s = str(v).strip()
+        if not s:
+            return None
+        out = [p.strip() for p in s.split(",") if p.strip()]
+        return out or None
 
 
 class KellyFrontmatter(BaseModel):
@@ -160,6 +199,7 @@ def _row_to_planned(d: dict[str, str]) -> PlannedWatchRow:
         cabin=d.get("cabin", "economy") or "economy",
         target_price=float(d["target_price"]) if d.get("target_price", "").strip() else None,
         target_miles=int(d["target_miles"]) if d.get("target_miles", "").strip() else None,
+        passenger_ids=d.get("passenger_ids") or None,
         seats_aero_sources=d.get("seats_aero_sources") or None,
         notes=d.get("notes", "") or "",
     )
@@ -183,6 +223,7 @@ def _row_to_opportunity(d: dict[str, str]) -> OpportunityRow:
         cabin=d.get("cabin", "economy") or "economy",
         max_cash=float(d["max_cash"]) if d.get("max_cash", "").strip() else None,
         max_miles=int(d["max_miles"]) if d.get("max_miles", "").strip() else None,
+        passenger_ids=d.get("passenger_ids") or None,
         seats_aero_sources=d.get("seats_aero_sources") or None,
         notes=d.get("notes", "") or "",
     )
@@ -230,9 +271,21 @@ def load_kelly_config(path: str | Path) -> KellyConfig:
     )
 
 
-def passengers_for_duffel(cfg: KellyConfig) -> list[dict[str, str]]:
-    """Build Duffel passenger dicts; uses default_passenger_ids if set, else all."""
-    ids = cfg.frontmatter.default_passenger_ids
+def passengers_for_cash(
+    cfg: KellyConfig,
+    *,
+    passenger_ids_override: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Build passenger type dicts for cash APIs.
+
+    Uses *passenger_ids_override* when set (per watchlist/opportunity row); otherwise
+    ``default_passenger_ids`` from front matter; when that is empty, all passengers.
+    """
+    ids = (
+        passenger_ids_override
+        if passenger_ids_override is not None
+        else cfg.frontmatter.default_passenger_ids
+    )
     rows = [p for p in cfg.passengers if not ids or p.id in ids]
     if not rows:
         rows = cfg.passengers

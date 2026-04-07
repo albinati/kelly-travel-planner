@@ -24,13 +24,13 @@ from kelly.orchestrator import (
 )
 from kelly.settings import (
     config_path as default_config_path,
-    duffel_token,
     seats_aero_key,
+    serpapi_api_key,
     toolkit_data_dir,
 )
-from kelly.duffel_client import search_cash_best
+from kelly.serpapi_client import search_cash_best
 from kelly.seats_aero_client import search_cached
-from kelly.md_config import passengers_for_duffel
+from kelly.md_config import passengers_for_cash
 from kelly.analytics import cash_baseline, phase1_forecast_hint
 from kelly.history_store import route_key
 from kelly.toolkit_data import ToolkitData, worth_summary
@@ -38,7 +38,7 @@ from kelly.toolkit_data import ToolkitData, worth_summary
 mcp = FastMCP(
     "Kelly",
     instructions=(
-        "Kelly finds cash (Duffel) and award (Seats.aero) options, compares to your "
+        "Kelly finds cash (SerpApi Google Flights) and award (Seats.aero) options, compares to your "
         "Markdown watchlist, and uses local SQLite history for typical/high/low context. "
         "Heuristics are not financial advice."
     ),
@@ -70,7 +70,7 @@ def kelly_scan_opportunities(config_path: str | None = None, persist: bool = Tru
     toolkit = ToolkitData(toolkit_data_dir())
     rows = scan_opportunities(
         cfg,
-        duffel_token=duffel_token(),
+        serpapi_key=serpapi_api_key(),
         seats_key=seats_aero_key(),
         store=store,
         toolkit=toolkit,
@@ -81,7 +81,7 @@ def kelly_scan_opportunities(config_path: str | None = None, persist: bool = Tru
 
 @mcp.tool()
 def kelly_scan_watchlist(config_path: str | None = None, persist: bool = True) -> str:
-    """Run planned watchlist scan (Duffel + Seats.aero); optionally persist to SQLite."""
+    """Run planned watchlist scan (SerpApi + Seats.aero); optionally persist to SQLite."""
     path = _cfg(config_path)
     if not path.is_file():
         return json.dumps({"error": f"config not found: {path}"})
@@ -90,7 +90,7 @@ def kelly_scan_watchlist(config_path: str | None = None, persist: bool = True) -
     toolkit = ToolkitData(toolkit_data_dir())
     rows = scan_planned_watchlist(
         cfg,
-        duffel_token=duffel_token(),
+        serpapi_key=serpapi_api_key(),
         seats_key=seats_aero_key(),
         store=store,
         toolkit=toolkit,
@@ -107,15 +107,15 @@ def kelly_search_cash(
     cabin: str = "economy",
     config_path: str | None = None,
 ) -> str:
-    """Ad-hoc Duffel cash search using passenger types from kelly.md (YYYY-MM-DD)."""
-    token = duffel_token()
+    """Ad-hoc SerpApi (Google Flights) cash search; passenger types from kelly.md (YYYY-MM-DD)."""
+    token = serpapi_api_key()
     if not token:
-        return json.dumps({"error": "DUFFEL_ACCESS_TOKEN not set"})
+        return json.dumps({"error": "SERPAPI_API_KEY not set"})
     path = _cfg(config_path)
     if not path.is_file():
         return json.dumps({"error": f"config not found: {path}"})
     cfg = load_kelly_config(path)
-    pax = passengers_for_duffel(cfg)
+    pax = passengers_for_cash(cfg)
     if not pax:
         return json.dumps({"error": "No passengers defined in config"})
     dep = date.fromisoformat(departure_date)
@@ -126,6 +126,7 @@ def kelly_search_cash(
         departure_date=dep,
         cabin=cabin,
         passengers=pax,
+        currency=cfg.frontmatter.currency,
     )
     return json.dumps(
         {
@@ -134,6 +135,7 @@ def kelly_search_cash(
             "best_offer_id": res.best_offer_id,
             "offer_count": res.offer_count,
             "error": res.error,
+            "itinerary_details": res.itinerary_details,
         },
         default=str,
     )
