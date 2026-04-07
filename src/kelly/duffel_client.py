@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 
 from duffel_api import Duffel
 
+from kelly.settings import duffel_api_version
+
 if TYPE_CHECKING:
     from duffel_api.models import Offer
 
@@ -39,12 +41,14 @@ def search_cash_best(
     cabin: str,
     passengers: list[dict[str, str]],
     max_connections: int = 1,
+    api_version: str | None = None,
 ) -> CashSearchResult:
     """Create an offer request with return_offers and return cheapest offer by total_amount."""
     origin_iata = origin_iata.upper().strip()
     destination_iata = destination_iata.upper().strip()
     cabin_d = _cabin_for_duffel(cabin)
-    client = Duffel(access_token=access_token)
+    ver = api_version if api_version is not None else duffel_api_version()
+    client = Duffel(access_token=access_token, api_version=ver)
     try:
         offer_request = (
             client.offer_requests.create()
