@@ -170,13 +170,13 @@ def _offer_identity(entry: dict[str, Any]) -> str | None:
 def _response_error(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
-    for key in ("error", "message", "msg", "detail"):
+    for key in ("error", "detail"):
         v = payload.get(key)
         if v is not None and str(v).strip():
             return str(v).strip()
     data = payload.get("data")
     if isinstance(data, dict):
-        for key in ("error", "message"):
+        for key in ("error",):
             v = data.get(key)
             if v is not None and str(v).strip():
                 return str(v).strip()
