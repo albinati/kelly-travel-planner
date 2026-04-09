@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "kelly"
 version = "0.1.0"
-description = "Travel-hacking assistant: SerpApi (Google Flights) cash search + Seats.aero, Markdown config, local SQLite history, MCP (OpenClaw-friendly)."
+description = "Travel-hacking assistant: RapidAPI/SerpApi cash, Seats.aero awards, Markdown + travel_policy, SQLite history, MCP aggregator (OpenClaw-friendly)."
 readme = "README.md"
 authors = ["Kelly contributors"]
 packages = [{ include = "kelly", from = "src" }]

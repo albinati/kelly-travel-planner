@@ -13,6 +13,14 @@ from pydantic import BaseModel, Field, field_validator
 # --- Models ---
 
 
+class TravelPolicy(BaseModel):
+    """Optional constraints from kelly.md front matter (``travel_policy``)."""
+
+    max_stops: int = Field(default=2, ge=0, le=10)
+    direct_only: bool = False
+    baggage: str = Field(default="", description="Free-text baggage expectation")
+
+
 class PassengerRow(BaseModel):
     """One row from the Passengers table."""
 
@@ -123,6 +131,7 @@ class KellyFrontmatter(BaseModel):
     default_passenger_ids: list[str] = Field(default_factory=list)
     history_window_days: int = 90
     max_dates_per_watch_row: int = 14
+    travel_policy: TravelPolicy | None = None
 
 
 class KellyConfig(BaseModel):

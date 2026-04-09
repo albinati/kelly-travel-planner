@@ -3,6 +3,10 @@ currency: USD
 default_passenger_ids: []
 history_window_days: 90
 max_dates_per_watch_row: 14
+travel_policy:
+  max_stops: 2
+  direct_only: false
+  baggage: "1 checked included"
 ---
 
 ## Passengers
