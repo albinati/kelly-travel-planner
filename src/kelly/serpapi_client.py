@@ -3,29 +3,15 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
 import httpx
 
+from kelly.cash_types import CashSearchResult
+
 SERPAPI_SEARCH_JSON = "https://serpapi.com/search.json"
-
-
-@dataclass
-class CashSearchResult:
-    departure_date: date
-    origin_iata: str
-    destination_iata: str
-    cabin: str
-    best_offer_id: str | None
-    best_total_amount: Decimal | None
-    best_total_currency: str | None
-    offer_count: int
-    error: str | None = None
-    # Per-leg segments for the selected (cheapest) SerpApi offer.
-    itinerary_details: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _normalize_cabin(cabin: str) -> str:

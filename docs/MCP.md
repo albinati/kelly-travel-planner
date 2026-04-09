@@ -39,9 +39,18 @@ Mirror the same `command` / `args` / `cwd` pattern in `opencode.json` per OpenCo
 
 Add a custom MCP server in Cursor settings with command `poetry`, args `run`, `kelly-mcp`, and working directory set to this repository.
 
-## Resource
+## Resources
 
-- `kelly://config` — read-only view of the Markdown file at `KELLY_CONFIG_PATH` (default `config/kelly.md`).
+- `kelly://config` — read-only Markdown at `KELLY_CONFIG_PATH` (default `config/kelly.md`).
+- `kelly://policy` — JSON view of `travel_policy` from front matter.
+
+## Tool layers (summary)
+
+- **Macro:** `kelly_macro_price_graph`, `kelly_macro_month_overview`, `kelly_macro_cheapest_destinations`, `kelly_macro_flexible_trip` (RapidAPI macro; graph uses `RAPIDAPI_KEY`).
+- **Mid:** `kelly_mid_apply_policy`, `kelly_mid_match_watchlist`, `kelly_mid_explain_rejection`, `kelly_mid_anomaly_scan`, `kelly_pipeline_graph_to_details`.
+- **Micro:** `kelly_micro_flight_quote`, `kelly_micro_hotel_search`, `kelly_micro_tripadvisor_context`, plus legacy `kelly_search_cash`.
+
+Secrets load from the repo `.env` at project root when the MCP `cwd` is the Kelly clone (`RAPIDAPI_KEY`, `SERPAPI_API_KEY`, `SEATS_AERO_API_KEY`).
 
 ## Optional: travel-hacking-toolkit data
 

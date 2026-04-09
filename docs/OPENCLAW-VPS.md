@@ -73,14 +73,17 @@ poetry run which kelly-mcp
 cp .env.example .env
 chmod 600 .env
 cp config/kelly.example.md config/kelly.md
-# edit .env: SERPAPI_API_KEY, SEATS_AERO_API_KEY
+# edit .env: RAPIDAPI_KEY (recommended), optional SERPAPI_API_KEY if using KELLY_CASH_BACKEND=serpapi, SEATS_AERO_API_KEY
 # edit config/kelly.md: passengers and watchlists
 ```
 
-Optional explicit paths (recommended in OpenClaw `env`):
+Optional explicit paths (only if you do not rely on repo-root `.env`):
 
 - `KELLY_CONFIG_PATH=/opt/kelly-travel-planner/config/kelly.md`
 - `KELLY_DATA_DIR=/opt/kelly-travel-planner/data` (SQLite history; ensure the user running OpenClaw can write here)
+- `KELLY_PROJECT_ROOT=/opt/kelly-travel-planner` (only if `cwd` is not the repo root)
+
+**Secrets:** Kelly loads `RAPIDAPI_KEY` / `SERPAPI_API_KEY` / `SEATS_AERO_API_KEY` from the project `.env` when `cwd` is the clone. Prefer **not** duplicating API keys inside `openclaw.json`; keep `chmod 600` on `.env` instead.
 
 ## 4. OpenClaw MCP entry
 
@@ -96,12 +99,10 @@ Example (adjust paths and match your OpenClaw schema if it differs):
         "command": "/opt/kelly-travel-planner/.venv/bin/kelly-mcp",
         "args": [],
         "cwd": "/opt/kelly-travel-planner",
-        "description": "Kelly travel hacking (SerpApi + Seats.aero)",
+        "description": "Kelly travel (RapidAPI/SerpApi cash + Seats.aero)",
         "env": {
           "KELLY_CONFIG_PATH": "/opt/kelly-travel-planner/config/kelly.md",
-          "KELLY_DATA_DIR": "/opt/kelly-travel-planner/data",
-          "SERPAPI_API_KEY": "paste-or-use-secret-manager",
-          "SEATS_AERO_API_KEY": "paste-or-use-secret-manager"
+          "KELLY_DATA_DIR": "/opt/kelly-travel-planner/data"
         }
       }
     }
@@ -109,7 +110,7 @@ Example (adjust paths and match your OpenClaw schema if it differs):
 }
 ```
 
-**Security:** Prefer injecting secrets from the host (systemd `EnvironmentFile`, Docker secrets, or your VPS secret store) instead of committing them. If OpenClaw supports an `envFile` for MCP servers, point it at `/opt/kelly-travel-planner/.env` with `chmod 600`.
+**Security:** Keep API keys in the repo `.env` (loaded automatically when `cwd` is the Kelly clone) or use systemd `EnvironmentFile` / Docker secrets — avoid pasting secrets into MCP JSON.
 
 Then **restart the OpenClaw gateway** (or equivalent) and verify:
 

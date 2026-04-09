@@ -1,6 +1,6 @@
 # Kelly
 
-Travel-hacking helper: planned trips and opportunistic searches using **SerpApi** (Google Flights cash) and **Seats.aero** (awards), with config in **Markdown**, **SQLite** history for typical/high/low context, and an **MCP** server for agents (OpenClaw, Claude Code, OpenCode, Cursor).
+Travel-hacking helper: planned trips and opportunistic searches using **RapidAPI** (Google Flights–style cash, macro price graph) and optional **SerpApi**, plus **Seats.aero** (awards), with config in **Markdown**, **SQLite** history, and an **MCP** server (macro / mid / micro tools — see [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md)).
 
 See [docs/MCP.md](docs/MCP.md) for host setup. For **OpenClaw on a VPS** (including **`curl | bash` install**), see [docs/OPENCLAW-VPS.md](docs/OPENCLAW-VPS.md).
 

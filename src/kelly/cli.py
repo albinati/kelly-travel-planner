@@ -19,7 +19,9 @@ from kelly.orchestrator import (
     scan_row_to_jsonable,
 )
 from kelly.settings import (
+    cash_backend,
     config_path,
+    rapidapi_key,
     seats_aero_key,
     serpapi_api_key,
     toolkit_data_dir,
@@ -31,7 +33,7 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 @app.callback()
 def _main() -> None:
-    """Kelly — travel hacking from Markdown + SerpApi + Seats.aero."""
+    """Kelly — travel hacking from Markdown + RapidAPI/SerpApi cash + Seats.aero."""
 
 
 @app.command()
@@ -58,10 +60,15 @@ def scan_cmd(
         raise typer.Exit(code=1)
 
     cfg = load_kelly_config(path)
-    token = serpapi_api_key()
     seats = seats_aero_key()
-    if not token:
-        typer.echo("Warning: SERPAPI_API_KEY not set — skipping cash search.", err=True)
+    cb = cash_backend()
+    has_cash = bool(rapidapi_key() if cb == "rapidapi" else serpapi_api_key())
+    if not has_cash:
+        typer.echo(
+            "Warning: no cash API key for "
+            f"{cb} — set RAPIDAPI_KEY or SERPAPI_API_KEY — skipping cash search.",
+            err=True,
+        )
     if not seats:
         typer.echo("Warning: SEATS_AERO_API_KEY not set — skipping award search.", err=True)
 
@@ -70,7 +77,6 @@ def scan_cmd(
 
     rows = scan_planned_watchlist(
         cfg,
-        serpapi_key=token,
         seats_key=seats,
         store=store,
         toolkit=toolkit,
@@ -104,13 +110,16 @@ def opportunities_cmd(
         typer.echo(f"Config not found: {path}", err=True)
         raise typer.Exit(code=1)
     cfg = load_kelly_config(path)
-    if not serpapi_api_key():
-        typer.echo("Warning: SERPAPI_API_KEY not set — skipping cash search.", err=True)
+    cb = cash_backend()
+    if not (rapidapi_key() if cb == "rapidapi" else serpapi_api_key()):
+        typer.echo(
+            f"Warning: no cash API key for {cb} — skipping cash search.",
+            err=True,
+        )
     store = None if no_persist else open_default_store()
     toolkit = ToolkitData(toolkit_data_dir())
     rows = scan_opportunities(
         cfg,
-        serpapi_key=serpapi_api_key(),
         seats_key=seats_aero_key(),
         store=store,
         toolkit=toolkit,

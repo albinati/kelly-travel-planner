@@ -23,24 +23,36 @@ from kelly.orchestrator import (
     scan_row_to_jsonable,
 )
 from kelly.settings import (
+    cash_backend,
     config_path as default_config_path,
+    rapidapi_key,
     seats_aero_key,
-    serpapi_api_key,
     toolkit_data_dir,
 )
-from kelly.serpapi_client import search_cash_best
 from kelly.seats_aero_client import search_cached
 from kelly.md_config import passengers_for_cash
 from kelly.analytics import cash_baseline, phase1_forecast_hint
 from kelly.history_store import route_key
 from kelly.toolkit_data import ToolkitData, worth_summary
+from kelly.services.aggregator import gated_pipeline_from_env
+from kelly.services.anomaly_service import scan_price_graph_vs_history
+from kelly.services.macro_service import (
+    macro_cheapest_destinations,
+    macro_flexible_trip_placeholder,
+    macro_month_overview,
+    macro_price_graph,
+)
+from kelly.services.mid_service import apply_travel_policy, explain_rejection, match_watchlist
+from kelly.services.micro_service import default_cash_key_and_backend, fetch_flight_quote
+from kelly.providers.booking import hotel_search
+from kelly.providers.tripadvisor import nearby_context
 
 mcp = FastMCP(
     "Kelly",
     instructions=(
-        "Kelly finds cash (SerpApi Google Flights) and award (Seats.aero) options, compares to your "
-        "Markdown watchlist, and uses local SQLite history for typical/high/low context. "
-        "Heuristics are not financial advice."
+        "Kelly aggregates RapidAPI (Google Flights–style cash) and Seats.aero awards, with optional "
+        "SerpApi cash when KELLY_CASH_BACKEND=serpapi. Macro tools use RAPIDAPI_KEY; load secrets from "
+        "repo .env (project root). Heuristics are not financial advice."
     ),
 )
 
@@ -61,7 +73,7 @@ def kelly_load_config(config_path: str | None = None) -> str:
 
 @mcp.tool()
 def kelly_scan_opportunities(config_path: str | None = None, persist: bool = True) -> str:
-    """Scan ## Opportunities (capped O-D pairs and dates per pair to limit API usage)."""
+    """Scan ## Opportunities (capped O-D pairs and dates per pair; cash via RapidAPI or SerpApi)."""
     path = _cfg(config_path)
     if not path.is_file():
         return json.dumps({"error": f"config not found: {path}"})
@@ -70,7 +82,6 @@ def kelly_scan_opportunities(config_path: str | None = None, persist: bool = Tru
     toolkit = ToolkitData(toolkit_data_dir())
     rows = scan_opportunities(
         cfg,
-        serpapi_key=serpapi_api_key(),
         seats_key=seats_aero_key(),
         store=store,
         toolkit=toolkit,
@@ -81,7 +92,7 @@ def kelly_scan_opportunities(config_path: str | None = None, persist: bool = Tru
 
 @mcp.tool()
 def kelly_scan_watchlist(config_path: str | None = None, persist: bool = True) -> str:
-    """Run planned watchlist scan (SerpApi + Seats.aero); optionally persist to SQLite."""
+    """Run planned watchlist scan (cash + Seats.aero); optionally persist to SQLite."""
     path = _cfg(config_path)
     if not path.is_file():
         return json.dumps({"error": f"config not found: {path}"})
@@ -90,7 +101,6 @@ def kelly_scan_watchlist(config_path: str | None = None, persist: bool = True) -
     toolkit = ToolkitData(toolkit_data_dir())
     rows = scan_planned_watchlist(
         cfg,
-        serpapi_key=serpapi_api_key(),
         seats_key=seats_aero_key(),
         store=store,
         toolkit=toolkit,
@@ -107,10 +117,10 @@ def kelly_search_cash(
     cabin: str = "economy",
     config_path: str | None = None,
 ) -> str:
-    """Ad-hoc SerpApi (Google Flights) cash search; passenger types from kelly.md (YYYY-MM-DD)."""
-    token = serpapi_api_key()
-    if not token:
-        return json.dumps({"error": "SERPAPI_API_KEY not set"})
+    """Ad-hoc cash search (RapidAPI or SerpApi per KELLY_CASH_BACKEND); passengers from kelly.md."""
+    key, backend = default_cash_key_and_backend()
+    if not key:
+        return json.dumps({"error": "Set RAPIDAPI_KEY or SERPAPI_API_KEY in .env"})
     path = _cfg(config_path)
     if not path.is_file():
         return json.dumps({"error": f"config not found: {path}"})
@@ -119,8 +129,9 @@ def kelly_search_cash(
     if not pax:
         return json.dumps({"error": "No passengers defined in config"})
     dep = date.fromisoformat(departure_date)
-    res = search_cash_best(
-        token,
+    res = fetch_flight_quote(
+        cash_key=key,
+        backend=backend,
         origin_iata=origin_iata,
         destination_iata=destination_iata,
         departure_date=dep,
@@ -130,6 +141,7 @@ def kelly_search_cash(
     )
     return json.dumps(
         {
+            "cash_backend": backend,
             "best_total_amount": str(res.best_total_amount) if res.best_total_amount else None,
             "best_total_currency": res.best_total_currency,
             "best_offer_id": res.best_offer_id,
@@ -139,6 +151,311 @@ def kelly_search_cash(
         },
         default=str,
     )
+
+
+@mcp.tool()
+def kelly_micro_flight_quote(
+    origin_iata: str,
+    destination_iata: str,
+    departure_date: str,
+    cabin: str = "economy",
+    return_date: str | None = None,
+    config_path: str | None = None,
+) -> str:
+    """Heavy dated flight quote (same backends as kelly_search_cash); optional return YYYY-MM-DD."""
+    key, backend = default_cash_key_and_backend()
+    if not key:
+        return json.dumps({"error": "Set RAPIDAPI_KEY or SERPAPI_API_KEY in .env"})
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    pax = passengers_for_cash(cfg)
+    if not pax:
+        return json.dumps({"error": "No passengers defined in config"})
+    ret = date.fromisoformat(return_date) if return_date else None
+    res = fetch_flight_quote(
+        cash_key=key,
+        backend=backend,
+        origin_iata=origin_iata,
+        destination_iata=destination_iata,
+        departure_date=date.fromisoformat(departure_date),
+        cabin=cabin,
+        passengers=pax,
+        currency=cfg.frontmatter.currency,
+        return_date=ret,
+    )
+    return json.dumps(
+        {
+            "cash_backend": backend,
+            "best_total_amount": str(res.best_total_amount) if res.best_total_amount else None,
+            "best_total_currency": res.best_total_currency,
+            "best_offer_id": res.best_offer_id,
+            "offer_count": res.offer_count,
+            "error": res.error,
+            "itinerary_details": res.itinerary_details,
+        },
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_macro_price_graph(
+    origin_iata: str,
+    destination_iata: str,
+    window_start: str,
+    window_end: str,
+    cabin: str = "economy",
+    config_path: str | None = None,
+) -> str:
+    """One calendar request per month in window — normalized date→price array (needs RAPIDAPI_KEY)."""
+    token = rapidapi_key()
+    if not token:
+        return json.dumps({"error": "RAPIDAPI_KEY not set (macro uses RapidAPI only)"})
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    g = macro_price_graph(
+        token,
+        origin_iata=origin_iata,
+        destination_iata=destination_iata,
+        window_start=date.fromisoformat(window_start),
+        window_end=date.fromisoformat(window_end),
+        cabin=cabin,
+        currency=cfg.frontmatter.currency,
+    )
+    return json.dumps(g, default=str)
+
+
+@mcp.tool()
+def kelly_macro_month_overview(
+    origin_iata: str,
+    destination_iata: str,
+    year_month: str,
+    cabin: str = "economy",
+    config_path: str | None = None,
+) -> str:
+    """Cheapest day + simple stats for YYYY-MM (RapidAPI price graph)."""
+    token = rapidapi_key()
+    if not token:
+        return json.dumps({"error": "RAPIDAPI_KEY not set"})
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    return json.dumps(
+        macro_month_overview(
+            token,
+            origin_iata=origin_iata,
+            destination_iata=destination_iata,
+            year_month=year_month,
+            cabin=cabin,
+            currency=cfg.frontmatter.currency,
+        ),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_macro_cheapest_destinations(
+    origin_iata: str,
+    month: str | None = None,
+    max_results: int = 10,
+) -> str:
+    """Kiwi-style destination discovery (stub until RAPIDAPI_KIWI_HOST path is implemented)."""
+    token = rapidapi_key()
+    if not token:
+        return json.dumps({"error": "RAPIDAPI_KEY not set"})
+    return json.dumps(
+        macro_cheapest_destinations(token, origin_iata=origin_iata, month=month, max_results=max_results),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_macro_flexible_trip(
+    origin_iata: str,
+    destinations_csv: str,
+    year_month: str,
+) -> str:
+    """Hint for flexible destination ranking (use price graph per destination for real data)."""
+    return json.dumps(
+        macro_flexible_trip_placeholder(
+            origin_iata=origin_iata,
+            destinations_csv=destinations_csv,
+            year_month=year_month,
+        ),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_mid_apply_policy(candidates_json: str, config_path: str | None = None) -> str:
+    """Filter JSON list of candidates with itinerary_details using kelly.md travel_policy."""
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    pol = cfg.frontmatter.travel_policy
+    try:
+        candidates = json.loads(candidates_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"invalid JSON: {e}"})
+    if not isinstance(candidates, list):
+        return json.dumps({"error": "candidates_json must be a JSON array"})
+    kept, rejected = apply_travel_policy(candidates, pol)
+    return json.dumps({"kept": kept, "rejected": rejected, "policy": pol.model_dump() if pol else None}, default=str)
+
+
+@mcp.tool()
+def kelly_mid_match_watchlist(candidates_json: str, config_path: str | None = None) -> str:
+    """Match macro/mid candidates to ## Planned watchlist rows (date window + target price)."""
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    try:
+        candidates = json.loads(candidates_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"invalid JSON: {e}"})
+    if not isinstance(candidates, list):
+        return json.dumps({"error": "candidates_json must be a JSON array"})
+    return json.dumps(match_watchlist(cfg, candidates), default=str)
+
+
+@mcp.tool()
+def kelly_mid_explain_rejection(candidate_json: str, config_path: str | None = None) -> str:
+    """Structured reasons a candidate fails travel_policy."""
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    pol = cfg.frontmatter.travel_policy
+    try:
+        cand = json.loads(candidate_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"invalid JSON: {e}"})
+    if not isinstance(cand, dict):
+        return json.dumps({"error": "candidate_json must be a JSON object"})
+    return json.dumps(explain_rejection(cand, pol), default=str)
+
+
+@mcp.tool()
+def kelly_mid_anomaly_scan(
+    graph_days_json: str,
+    origin_iata: str,
+    destination_iata: str,
+    cabin: str = "economy",
+    target_price: float | None = None,
+    reference_departure_date: str | None = None,
+    window_days: int = 90,
+) -> str:
+    """Label each calendar day vs SQLite baseline (no heavy flight API). graph_days_json = kelly_macro_price_graph days."""
+    try:
+        days = json.loads(graph_days_json)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"invalid JSON: {e}"})
+    if not isinstance(days, list):
+        return json.dumps({"error": "expected JSON array"})
+    store = open_default_store()
+    ref = date.fromisoformat(reference_departure_date) if reference_departure_date else None
+    if ref is None and days:
+        try:
+            ref = date.fromisoformat(str(days[0].get("date", ""))[:10])
+        except ValueError:
+            ref = date.today()
+    if ref is None:
+        ref = date.today()
+    rk = route_key(origin_iata, destination_iata, cabin, ref)
+    hist_cash, _ = store.fetch_amounts_for_route(rk, window_days=window_days)
+    rows = scan_price_graph_vs_history(
+        days,
+        origin_iata=origin_iata,
+        destination_iata=destination_iata,
+        cabin=cabin,
+        hist_amounts=hist_cash,
+        target_price=target_price,
+    )
+    return json.dumps(
+        [
+            {
+                "date": r.date.isoformat(),
+                "indicative_price": r.indicative_price,
+                "label": r.label,
+                "reason": r.reason,
+            }
+            for r in rows
+        ],
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_pipeline_graph_to_details(
+    origin_iata: str,
+    destination_iata: str,
+    window_start: str,
+    window_end: str,
+    cabin: str = "economy",
+    target_price: float | None = None,
+    config_path: str | None = None,
+) -> str:
+    """Price graph → anomaly vs SQLite + policy → heavy micro only for opportunity dates (capped)."""
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    pax = passengers_for_cash(cfg)
+    if not pax:
+        return json.dumps({"error": "No passengers defined in config"})
+    store = open_default_store()
+    out = gated_pipeline_from_env(
+        origin_iata=origin_iata,
+        destination_iata=destination_iata,
+        window_start=date.fromisoformat(window_start),
+        window_end=date.fromisoformat(window_end),
+        cabin=cabin,
+        currency=cfg.frontmatter.currency,
+        passengers=pax,
+        store=store,
+        policy=cfg.frontmatter.travel_policy,
+        target_price=target_price,
+    )
+    out["cash_backend_effective"] = cash_backend()
+    return json.dumps(out, default=str)
+
+
+@mcp.tool()
+def kelly_micro_hotel_search(
+    city: str,
+    check_in: str,
+    check_out: str,
+    adults: int = 2,
+) -> str:
+    """Hotel listings stub (set RAPIDAPI_BOOKING_HOST and implement provider)."""
+    token = rapidapi_key()
+    if not token:
+        return json.dumps({"error": "RAPIDAPI_KEY not set"})
+    return json.dumps(
+        hotel_search(
+            token,
+            city=city,
+            check_in=date.fromisoformat(check_in),
+            check_out=date.fromisoformat(check_out),
+            adults=adults,
+        ),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_micro_tripadvisor_context(destination_name: str, limit: int = 5) -> str:
+    """Trip context stub (set RAPIDAPI_TRIPADVISOR_HOST)."""
+    token = rapidapi_key()
+    if not token:
+        return json.dumps({"error": "RAPIDAPI_KEY not set"})
+    return json.dumps(nearby_context(token, destination_name=destination_name, limit=limit), default=str)
 
 
 @mcp.tool()
@@ -262,6 +579,17 @@ def kelly_config_resource() -> str:
     if not path.is_file():
         return f"(missing config file: {path})"
     return path.read_text(encoding="utf-8")
+
+
+@mcp.resource("kelly://policy", mime_type="application/json")
+def kelly_policy_resource() -> str:
+    """Travel policy from kelly.md front matter (JSON)."""
+    path = default_config_path()
+    if not path.is_file():
+        return "{}"
+    cfg = load_kelly_config(path)
+    pol = cfg.frontmatter.travel_policy
+    return json.dumps(pol.model_dump() if pol else {}, default=str)
 
 
 def main() -> None:
