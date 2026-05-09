@@ -1,4 +1,4 @@
-"""Typer CLI for Kelly."""
+"""Typer CLI for Kelly — group trip planner (Eurostar + Airbnb)."""
 
 from __future__ import annotations
 
@@ -9,32 +9,17 @@ from pathlib import Path
 import typer
 
 from kelly import __version__
+from kelly.history_store import open_default_store
 from kelly.md_config import load_kelly_config
-from kelly.orchestrator import (
-    history_summary_for_route,
-    load_config_summary,
-    open_default_store,
-    scan_opportunities,
-    scan_planned_watchlist,
-    scan_row_to_jsonable,
-)
 from kelly.services.trip_planner import plan_trip
-from kelly.settings import (
-    cash_backend,
-    config_path,
-    rapidapi_key,
-    seats_aero_key,
-    serpapi_api_key,
-    toolkit_data_dir,
-)
-from kelly.toolkit_data import ToolkitData
+from kelly.settings import config_path
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 
 @app.callback()
 def _main() -> None:
-    """Kelly — travel hacking from Markdown + RapidAPI/SerpApi cash + Seats.aero."""
+    """Kelly — group trip planner: Eurostar trains + Airbnb stays from a Markdown config."""
 
 
 @app.command()
@@ -43,133 +28,22 @@ def version() -> None:
     typer.echo(__version__)
 
 
-@app.command("scan")
-def scan_cmd(
-    config: Path | None = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to kelly.md",
-    ),
-    no_persist: bool = typer.Option(False, "--no-persist", help="Do not write SQLite history"),
-    json_out: bool = typer.Option(False, "--json", help="Print JSON lines"),
-) -> None:
-    """Scan planned watchlist and print results."""
-    path = config or config_path()
-    if not path.is_file():
-        typer.echo(f"Config not found: {path}", err=True)
-        raise typer.Exit(code=1)
-
-    cfg = load_kelly_config(path)
-    seats = seats_aero_key()
-    cb = cash_backend()
-    has_cash = bool(rapidapi_key() if cb == "rapidapi" else serpapi_api_key())
-    if not has_cash:
-        typer.echo(
-            "Warning: no cash API key for "
-            f"{cb} — set RAPIDAPI_KEY or SERPAPI_API_KEY — skipping cash search.",
-            err=True,
-        )
-    if not seats:
-        typer.echo("Warning: SEATS_AERO_API_KEY not set — skipping award search.", err=True)
-
-    store = None if no_persist else open_default_store()
-    toolkit = ToolkitData(toolkit_data_dir())
-
-    rows = scan_planned_watchlist(
-        cfg,
-        seats_key=seats,
-        store=store,
-        toolkit=toolkit,
-        persist=not no_persist,
-    )
-
-    if json_out:
-        for r in rows:
-            typer.echo(json.dumps(scan_row_to_jsonable(r), default=str))
-    else:
-        for r in rows:
-            line = (
-                f"{r.watchlist_row_id} {r.departure_date} {r.origin_iata}-{r.destination_iata} "
-                f"cash={r.cash.best_total_amount if r.cash and r.cash.best_total_amount else '—'} "
-                f"awards={r.awards.best_miles if r.awards else '—'} "
-                f"trigger_p={r.triggered_price} trigger_m={r.triggered_miles} "
-                f"vs_hist_cash={r.cash_baseline_label}"
-            )
-            typer.echo(line)
-
-
-@app.command("opportunities")
-def opportunities_cmd(
-    config: Path | None = typer.Option(None, "--config", "-c"),
-    no_persist: bool = typer.Option(False, "--no-persist"),
-    json_out: bool = typer.Option(False, "--json"),
-) -> None:
-    """Scan opportunity / wishlist rows (capped)."""
-    path = config or config_path()
-    if not path.is_file():
-        typer.echo(f"Config not found: {path}", err=True)
-        raise typer.Exit(code=1)
-    cfg = load_kelly_config(path)
-    cb = cash_backend()
-    if not (rapidapi_key() if cb == "rapidapi" else serpapi_api_key()):
-        typer.echo(
-            f"Warning: no cash API key for {cb} — skipping cash search.",
-            err=True,
-        )
-    store = None if no_persist else open_default_store()
-    toolkit = ToolkitData(toolkit_data_dir())
-    rows = scan_opportunities(
-        cfg,
-        seats_key=seats_aero_key(),
-        store=store,
-        toolkit=toolkit,
-        persist=not no_persist,
-    )
-    if json_out:
-        for r in rows:
-            typer.echo(json.dumps(scan_row_to_jsonable(r), default=str))
-    else:
-        for r in rows:
-            typer.echo(
-                f"{r.watchlist_row_id} {r.departure_date} {r.origin_iata}-{r.destination_iata} "
-                f"cash={r.cash.best_total_amount if r.cash and r.cash.best_total_amount else '—'}"
-            )
-
-
 @app.command("config-show")
 def config_show(
     config: Path | None = typer.Option(None, "--config", "-c"),
 ) -> None:
-    """Print parsed config summary as JSON."""
+    """Print parsed config (trains + stays) as JSON."""
     path = config or config_path()
     if not path.is_file():
         typer.echo(f"Config not found: {path}", err=True)
         raise typer.Exit(code=1)
     cfg = load_kelly_config(path)
-    typer.echo(json.dumps(load_config_summary(cfg), default=str, indent=2))
-
-
-@app.command("history-route")
-def history_route(
-    origin: str = typer.Argument(...),
-    dest: str = typer.Argument(...),
-    departure: str = typer.Argument(..., help="YYYY-MM-DD"),
-    cabin: str = typer.Option("economy", "--cabin"),
-) -> None:
-    """Show baseline stats for a route key from SQLite history."""
-    from datetime import date
-
-    dep = date.fromisoformat(departure)
-    store = open_default_store()
-    summary = history_summary_for_route(
-        store,
-        origin.upper(),
-        dest.upper(),
-        cabin,
-        dep,
-    )
-    typer.echo(json.dumps(summary, indent=2, default=str))
+    summary = {
+        "frontmatter": cfg.frontmatter.model_dump(mode="json"),
+        "trains": [t.model_dump(mode="json", by_alias=True) for t in cfg.trains],
+        "stays": [s.model_dump(mode="json") for s in cfg.stays],
+    }
+    typer.echo(json.dumps(summary, default=str, indent=2))
 
 
 @app.command("plan")

@@ -1,1 +1,1 @@
-"""RapidAPI provider modules (HTTP only — no nested MCP clients)."""
+"""External-data providers — Airbnb (pyairbnb GraphQL) and Eurostar (patchright Chromium)."""
