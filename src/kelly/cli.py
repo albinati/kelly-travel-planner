@@ -18,6 +18,7 @@ from kelly.orchestrator import (
     scan_planned_watchlist,
     scan_row_to_jsonable,
 )
+from kelly.services.trip_planner import plan_trip
 from kelly.settings import (
     cash_backend,
     config_path,
@@ -169,6 +170,23 @@ def history_route(
         dep,
     )
     typer.echo(json.dumps(summary, indent=2, default=str))
+
+
+@app.command("plan")
+def plan_cmd(
+    trip_id: str = typer.Argument(..., help="Trip id declared in kelly.md (Trains/Stays sections)"),
+    config: Path | None = typer.Option(None, "--config", "-c"),
+    no_persist: bool = typer.Option(False, "--no-persist", help="Do not write SQLite history"),
+) -> None:
+    """Plan a trip from kelly.md: trains (out/back) + stay. Prints JSON."""
+    path = config or config_path()
+    if not path.is_file():
+        typer.echo(f"Config not found: {path}", err=True)
+        raise typer.Exit(code=1)
+    cfg = load_kelly_config(path)
+    store = None if no_persist else open_default_store()
+    result = plan_trip(cfg, trip_id, store=store, persist=not no_persist)
+    typer.echo(json.dumps(result, default=str, indent=2))
 
 
 def main() -> None:

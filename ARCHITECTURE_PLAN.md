@@ -155,3 +155,22 @@ src/kelly/
 ## 7. Security
 
 Rotate any API key that appeared in chat or tickets. Never `git add .env`.
+
+---
+
+## 8. Non-flight track (`[trips]` extra)
+
+The flight track (RapidAPI + SerpApi + Seats.aero) does not fit group trips like London→Paris via Eurostar plus a whole-apartment Airbnb. A parallel **trips track** exists for those, gated behind the optional `[trips]` Poetry extra:
+
+- **Providers:** `providers/airbnb.py` (uses `pyairbnb` — Airbnb's internal staysSearch GraphQL, free, no key), `providers/playwright_eurostar.py` (uses `patchright`, a stealth Playwright fork, against eurostar.com).
+- **Services:** `services/stay_service.py`, `services/train_service.py`, `services/trip_planner.py`.
+- **Config:** `TrainRow` / `StayRow` under `## Trains` / `## Stays` in `kelly.md`.
+- **MCP:** `kelly_micro_eurostar_search`, `kelly_micro_airbnb_search`, `kelly_plan_trip`.
+- **CLI:** `kelly plan <trip_id>`.
+- **Install:** `poetry install --extras "mcp trips"` (default in `scripts/setup-venv.sh`). Eurostar scraping additionally needs Chromium — `patchright install chromium` locally, or build the Docker image with `INSTALL_BROWSERS=true`.
+
+Both providers import their heavy deps lazily inside the call sites, so a flights-only install (`--extras mcp`) still loads the modules cleanly and surfaces a clean `error` string at call time when `pyairbnb` / `patchright` is missing. That keeps `services/*` and `mcp_server.py` free of import gymnastics.
+
+Eurostar age bands honoured in the provider URL: 0–3 infant / 4–11 child / 12–25 youth / 26–59 adult / 60+ senior. Prices returned are the per-adult lowest fare on each departure; multiplying by passenger count is a reasonable planning ceiling but not the bookable total.
+
+History for non-flight items lives in dedicated tables (`train_observations`, `stay_observations`) on `SqliteHistoryStore` — separate from the flight `Observation` table so route-key semantics and baseline computation don't collide. Anomaly labelling for trains/stays is not implemented yet (different shape than flight P10).
