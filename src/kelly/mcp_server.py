@@ -44,6 +44,10 @@ from kelly.services.macro_service import (
 )
 from kelly.services.mid_service import apply_travel_policy, explain_rejection, match_watchlist
 from kelly.services.micro_service import default_cash_key_and_backend, fetch_flight_quote
+from kelly.services.stay_service import search_stay, stay_result_to_jsonable
+from kelly.services.train_service import search_train, train_result_to_jsonable
+from kelly.services.trip_planner import plan_trip
+from kelly.md_config import StayRow, TrainRow
 from kelly.providers.booking import hotel_search
 from kelly.providers.tripadvisor import nearby_context
 
@@ -570,6 +574,99 @@ def kelly_explain_deal(
     if not parts:
         parts.append("No toolkit data path and no route context — set TRAVEL_HACKING_TOOLKIT_DATA or pass route + cash.")
     return json.dumps({"notes": parts}, default=str)
+
+
+@mcp.tool()
+def kelly_micro_eurostar_search(
+    origin_city: str,
+    destination_city: str,
+    date_start: str,
+    date_end: str,
+    adults: int,
+    seniors: int = 0,
+    teens: int = 0,
+    children_ages: str = "",
+    class_: str = "standard",
+    config_path: str | None = None,
+    persist: bool = True,
+) -> str:
+    """One-shot Eurostar search (via patchright). children_ages: comma-separated ints (e.g. '3,4,5')."""
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    ages = [int(x.strip()) for x in children_ages.split(",") if x.strip()]
+    row = TrainRow(
+        id="__adhoc__",
+        operator="eurostar",
+        origin_city=origin_city,
+        destination_city=destination_city,
+        date_start=date.fromisoformat(date_start),
+        date_end=date.fromisoformat(date_end),
+        **{"class": class_},
+        adults=adults,
+        seniors=seniors,
+        teens=teens,
+        children_ages=ages,
+    )
+    store = open_default_store() if persist else None
+    return json.dumps(
+        train_result_to_jsonable(search_train(cfg, row, store=store, persist=persist)),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_micro_airbnb_search(
+    area: str,
+    check_in: str,
+    check_out: str,
+    adults: int,
+    children_ages: str = "",
+    bedrooms_min: int = 1,
+    near: str = "",
+    max_total: float | None = None,
+    config_path: str | None = None,
+    persist: bool = True,
+) -> str:
+    """One-shot Airbnb search (via pyairbnb). children_ages / near: comma-separated strings."""
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    ages = [int(x.strip()) for x in children_ages.split(",") if x.strip()]
+    near_list = [x.strip() for x in near.split(",") if x.strip()]
+    row = StayRow(
+        id="__adhoc__",
+        area=area,
+        check_in=date.fromisoformat(check_in),
+        check_out=date.fromisoformat(check_out),
+        adults=adults,
+        children_ages=ages,
+        bedrooms_min=bedrooms_min,
+        near=near_list,
+        max_total=max_total,
+    )
+    store = open_default_store() if persist else None
+    return json.dumps(
+        stay_result_to_jsonable(search_stay(cfg, row, store=store, persist=persist)),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_plan_trip(trip_id: str, config_path: str | None = None, persist: bool = True) -> str:
+    """Plan a group trip declared in kelly.md (## Trains / ## Stays sections).
+
+    Looks up trains `<trip_id>-out` and `<trip_id>-back` (or a single `<trip_id>` train)
+    plus the stay with id `<trip_id>`; returns combined JSON with search results.
+    """
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    store = open_default_store() if persist else None
+    return json.dumps(plan_trip(cfg, trip_id, store=store, persist=persist), default=str)
 
 
 @mcp.resource("kelly://config", mime_type="text/markdown")

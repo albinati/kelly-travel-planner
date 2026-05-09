@@ -237,6 +237,8 @@ def load_config_summary(cfg: KellyConfig) -> dict[str, Any]:
         "passengers": [p.model_dump() for p in cfg.passengers],
         "planned_rows": [p.model_dump(mode="json") for p in cfg.planned],
         "opportunity_rows": [p.model_dump(mode="json") for p in cfg.opportunities],
+        "trains": [t.model_dump(mode="json", by_alias=True) for t in cfg.trains],
+        "stays": [s.model_dump(mode="json") for s in cfg.stays],
         "frontmatter": cfg.frontmatter.model_dump(mode="json"),
         "cash_backend": kelly_settings.cash_backend(),
     }
