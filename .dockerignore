@@ -1,0 +1,39 @@
+# Secrets — NEVER bake into images
+.env
+.env.*
+!.env.example
+
+# Local state
+data/*.sqlite
+data/*.sqlite-journal
+*.sqlite
+*.sqlite-journal
+
+# Virtualenvs / caches
+.venv/
+.tools/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# VCS / editor / OS
+.git/
+.github/
+.gitignore
+.idea/
+.vscode/
+.DS_Store
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Tests and developer-only files (runtime image doesn't need these)
+tests/
+docs/
+scripts/install-openclaw-kelly.sh
+ARCHITECTURE_PLAN.md
+CLAUDE.md
