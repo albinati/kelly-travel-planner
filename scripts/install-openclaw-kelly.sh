@@ -119,7 +119,7 @@ if [[ ! -f "$INSTALL_DIR/config/kelly.md" ]]; then
 fi
 if [[ ! -f "$INSTALL_DIR/.env" ]]; then
   run cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env" || true
-  echo "Created $INSTALL_DIR/.env from example — add RAPIDAPI_KEY (and/or SERPAPI_API_KEY) and SEATS_AERO_API_KEY." >&2
+  echo "Created $INSTALL_DIR/.env from example. Edit only if you need to override the default paths (no API keys required)." >&2
 fi
 
 register_openclaw_cli() {
