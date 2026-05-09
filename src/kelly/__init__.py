@@ -1,3 +1,3 @@
-"""Kelly — travel hacking core."""
+"""Kelly — group trip planner (Eurostar + Airbnb) with stdio MCP server."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

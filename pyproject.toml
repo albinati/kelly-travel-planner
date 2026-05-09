@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "kelly"
-version = "0.1.0"
-description = "Travel-hacking assistant: RapidAPI/SerpApi cash, Seats.aero awards, Markdown + travel_policy, SQLite history, MCP aggregator (OpenClaw-friendly)."
+version = "0.2.0"
+description = "Group trip planner: Eurostar trains + Airbnb stays from a Markdown config, with SQLite price baselines and a stdio MCP server."
 readme = "README.md"
 authors = ["Kelly contributors"]
 packages = [{ include = "kelly", from = "src" }]
@@ -14,15 +14,12 @@ pyyaml = "^6.0"
 python-frontmatter = "^1.1"
 typer = "^0.24.0"
 python-dotenv = "^1.2"
+pyairbnb = "^2.2.1"
+patchright = "^1.59.1"
 mcp = { version = "^1.27", optional = true }
-statsmodels = { version = "^0.14", optional = true }
-pyairbnb = { version = "^2.2.1", optional = true }
-patchright = { version = "^1.59.1", optional = true }
 
 [tool.poetry.extras]
 mcp = ["mcp"]
-analytics = ["statsmodels"]
-trips = ["pyairbnb", "patchright"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
