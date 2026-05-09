@@ -58,6 +58,7 @@ git clone git@github.com:albinati/kelly-travel-planner.git /opt/kelly-travel-pla
 cd /opt/kelly-travel-planner
 export PATH="$HOME/.local/bin:$PATH"
 poetry install --extras mcp --no-interaction
+poetry run patchright install chromium      # one-time, for Eurostar scraping
 ```
 
 Resolve the **real** path to the MCP binary (avoids `poetry run` lookup issues under OpenClaw):
@@ -67,23 +68,21 @@ poetry run which kelly-mcp
 # e.g. /opt/kelly-travel-planner/.venv/bin/kelly-mcp
 ```
 
-## 3. Config and secrets on the VPS
+## 3. Config on the VPS
 
 ```bash
-cp .env.example .env
-chmod 600 .env
 cp config/kelly.example.md config/kelly.md
-# edit .env: RAPIDAPI_KEY (recommended), optional SERPAPI_API_KEY if using KELLY_CASH_BACKEND=serpapi, SEATS_AERO_API_KEY
-# edit config/kelly.md: passengers and watchlists
+patchright install chromium                      # one-time, for Eurostar scraping
+# edit config/kelly.md: declare your trips (## Trains and ## Stays sections)
 ```
 
-Optional explicit paths (only if you do not rely on repo-root `.env`):
+No API keys are required: `pyairbnb` and `patchright` work key-free. `.env` is optional and only used for path overrides.
+
+Optional explicit paths (only if you do not rely on repo-root resolution):
 
 - `KELLY_CONFIG_PATH=/opt/kelly-travel-planner/config/kelly.md`
 - `KELLY_DATA_DIR=/opt/kelly-travel-planner/data` (SQLite history; ensure the user running OpenClaw can write here)
 - `KELLY_PROJECT_ROOT=/opt/kelly-travel-planner` (only if `cwd` is not the repo root)
-
-**Secrets:** Kelly loads `RAPIDAPI_KEY` / `SERPAPI_API_KEY` / `SEATS_AERO_API_KEY` from the project `.env` when `cwd` is the clone. Prefer **not** duplicating API keys inside `openclaw.json`; keep `chmod 600` on `.env` instead.
 
 ## 4. OpenClaw MCP entry
 
@@ -99,7 +98,7 @@ Example (adjust paths and match your OpenClaw schema if it differs):
         "command": "/opt/kelly-travel-planner/.venv/bin/kelly-mcp",
         "args": [],
         "cwd": "/opt/kelly-travel-planner",
-        "description": "Kelly travel (RapidAPI/SerpApi cash + Seats.aero)",
+        "description": "Kelly group trip planner (Eurostar + Airbnb)",
         "env": {
           "KELLY_CONFIG_PATH": "/opt/kelly-travel-planner/config/kelly.md",
           "KELLY_DATA_DIR": "/opt/kelly-travel-planner/data"
@@ -109,8 +108,6 @@ Example (adjust paths and match your OpenClaw schema if it differs):
   }
 }
 ```
-
-**Security:** Keep API keys in the repo `.env` (loaded automatically when `cwd` is the Kelly clone) or use systemd `EnvironmentFile` / Docker secrets — avoid pasting secrets into MCP JSON.
 
 Then **restart the OpenClaw gateway** (or equivalent) and verify:
 
@@ -157,9 +154,8 @@ On the VPS:
 
 ```bash
 cd /opt/kelly-travel-planner
-set -a && [ -f .env ] && . ./.env && set +a   # or export vars manually
 poetry run kelly config-show -c config/kelly.md
-poetry run kelly scan -c config/kelly.md --no-persist
+poetry run kelly plan <trip_id> --no-persist
 ```
 
 ---

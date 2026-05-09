@@ -1,12 +1,10 @@
 # MCP host setup
 
-Kelly exposes a **stdio** MCP server: `kelly-mcp` (after `poetry install --extras mcp`).
+Kelly ships a **stdio** MCP server: `kelly-mcp` (after `poetry install --extras mcp`). 4 tools + 1 resource — see [main README](../README.md) for the catalog.
 
-**Running OpenClaw on a VPS?** See [OPENCLAW-VPS.md](OPENCLAW-VPS.md) for clone, Poetry, absolute paths, `openclaw.json` example, and a **`curl | bash` installer** ([`scripts/install-openclaw-kelly.sh`](../scripts/install-openclaw-kelly.sh)) that mirrors OpenClaw-style one-liner installs.
+**Running OpenClaw on a VPS?** See [OPENCLAW-VPS.md](OPENCLAW-VPS.md) for clone, Poetry, absolute paths, `openclaw.json` example, and a **`curl | bash` installer** ([`scripts/install-openclaw-kelly.sh`](../scripts/install-openclaw-kelly.sh)).
 
-## OpenClaw (default)
-
-Use your OpenClaw MCP flow to add a command that runs Kelly from this repo, for example:
+## OpenClaw
 
 ```bash
 cd /path/to/kelly-travel-planner
@@ -17,7 +15,7 @@ Point the host at the project directory so `KELLY_CONFIG_PATH` and `KELLY_DATA_D
 
 ## Claude Code
 
-Add to `.mcp.json` in your project or home config (shape may vary by Claude Code version):
+Add to `.mcp.json` in your project or home config:
 
 ```json
 {
@@ -31,31 +29,37 @@ Add to `.mcp.json` in your project or home config (shape may vary by Claude Code
 }
 ```
 
+For a stable absolute path, point `command` directly at `/path/to/kelly-travel-planner/.venv/bin/kelly-mcp` after running `./scripts/setup-venv.sh`.
+
 ## OpenCode
 
-Mirror the same `command` / `args` / `cwd` pattern in `opencode.json` per OpenCode’s MCP documentation.
+Mirror the same `command` / `args` / `cwd` pattern in `opencode.json` per OpenCode's MCP documentation.
 
 ## Cursor
 
 Add a custom MCP server in Cursor settings with command `poetry`, args `run`, `kelly-mcp`, and working directory set to this repository.
 
-## Resources
+## Tools
 
-- `kelly://config` — read-only Markdown at `KELLY_CONFIG_PATH` (default `config/kelly.md`).
-- `kelly://policy` — JSON view of `travel_policy` from front matter.
+| Tool | What it does |
+| --- | --- |
+| `kelly_load_config` | Parse `kelly.md` → JSON of frontmatter + trains + stays |
+| `kelly_eurostar_search` | One-shot Eurostar fare scrape (bypass declared trips) |
+| `kelly_airbnb_search` | One-shot Airbnb whole-listing search |
+| `kelly_plan_trip` | Look up `<trip_id>-out` / `<trip_id>-back` / `<trip_id>` in `kelly.md` and curate a shortlist |
 
-## Tool layers (summary)
+All search tools accept `persist: bool = True`; pass `False` to skip the SQLite write.
 
-- **Macro:** `kelly_macro_price_graph`, `kelly_macro_month_overview`, `kelly_macro_cheapest_destinations`, `kelly_macro_flexible_trip` (RapidAPI macro; graph uses `RAPIDAPI_KEY`).
-- **Mid:** `kelly_mid_apply_policy`, `kelly_mid_match_watchlist`, `kelly_mid_explain_rejection`, `kelly_mid_anomaly_scan`, `kelly_pipeline_graph_to_details`.
-- **Micro:** `kelly_micro_flight_quote`, `kelly_micro_hotel_search`, `kelly_micro_tripadvisor_context`, plus legacy `kelly_search_cash`.
+## Resource
 
-Secrets load from the repo `.env` at project root when the MCP `cwd` is the Kelly clone (`RAPIDAPI_KEY`, `SERPAPI_API_KEY`, `SEATS_AERO_API_KEY`).
+- `kelly://config` — the current `kelly.md` as Markdown.
 
-## Optional: travel-hacking-toolkit data
+## Browsers
+
+Eurostar scraping needs Chromium installed via patchright:
 
 ```bash
-git submodule add https://github.com/borski/travel-hacking-toolkit.git vendor/travel-hacking-toolkit
+patchright install chromium
 ```
 
-Then either rely on auto-discovery of `vendor/travel-hacking-toolkit/data` or set `TRAVEL_HACKING_TOOLKIT_DATA`.
+Or build the Docker image with `INSTALL_BROWSERS=true` (default in the supplied `Dockerfile`).
