@@ -28,3 +28,15 @@ travel_policy:
 | id | origin_airports | destination_airports | start_date | end_date | cabin | max_cash | max_miles | seats_aero_sources | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | eu-business | JFK,EWR | CDG,AMS | 2026-05-01 | 2026-05-31 | business | 1800 |  | flyingblue,aeroplan | Europe business dump |
+
+## Trains
+
+| id | operator | origin_city | destination_city | date_start | date_end | class | adults | seniors | teens | children_ages | target_total | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| example-out | eurostar | LON | PAR | 2026-08-20 | 2026-08-22 | standard | 2 | 0 | 0 |  | 400 | Outbound Eurostar |
+
+## Stays
+
+| id | area | check_in | check_out | adults | children_ages | bedrooms_min | near | max_walk_to_transit_min | max_total | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| example | Paris | 2026-08-20 | 2026-08-25 | 2 |  | 1 | Châtelet-Les Halles | 10 | 1200 | Single couple example |
