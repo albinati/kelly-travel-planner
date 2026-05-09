@@ -1,0 +1,40 @@
+# Kelly travel-planner — local docker compose.
+#
+# Secrets stay outside the image: `env_file: .env` injects them at run time.
+# Config and data are bind-mounted so kelly.md edits and SQLite history
+# persist across container rebuilds.
+#
+# Usage:
+#   docker compose build              # default slim image (no browsers)
+#   docker compose run --rm kelly kelly --help
+#   docker compose run --rm kelly kelly scan -c config/kelly.md
+#   docker compose run --rm -T kelly  # stdio MCP server (default CMD)
+#
+# To enable Chromium for Eurostar scraping, override the build arg:
+#   INSTALL_BROWSERS=true docker compose build kelly
+
+services:
+  kelly:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_BROWSERS: "${INSTALL_BROWSERS:-false}"
+        POETRY_EXTRAS: "${POETRY_EXTRAS:-mcp trips}"
+    image: kelly-travel-planner:local
+    env_file:
+      - .env
+    environment:
+      KELLY_PROJECT_ROOT: /app
+      KELLY_CONFIG_PATH: /app/config/kelly.md
+      KELLY_DATA_DIR: /app/data
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    # stdio MCP wants stdin attached and no TTY; `compose run -T kelly` is the
+    # right invocation when an MCP host pipes JSON-RPC over stdio.
+    stdin_open: true
+    tty: false
+    init: true
+    # No published ports: stdio MCP doesn't need them, and exposing nothing
+    # is the safe default when API keys live in .env.
