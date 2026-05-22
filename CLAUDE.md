@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**Kelly** is a group trip planner: declare trips in a Markdown config, run one command, get a curated **Eurostar + Airbnb** shortlist with bookable links. No API keys: `pyairbnb` hits Airbnb's internal staysSearch GraphQL, `patchright` (stealth Playwright fork) drives a headless Chromium against eurostar.com. Persists searches to local SQLite for per-trip price baselines. Exposes a stdio MCP server (`kelly-mcp`) plus a Typer CLI (`kelly`).
+**Kelly** is a group trip planner: declare trips in a Markdown config, run one command, get a curated **Eurostar + Airbnb + Hotel** shortlist with bookable links. Airbnb (key-free) via `pyairbnb`, Eurostar (key-free) via `patchright`, hotels via **LiteAPI** (REST, key in `.env` — sandbox prefix `sand_`, production `prod_`). Persists searches to local SQLite for per-trip price baselines. Exposes a stdio MCP server (`kelly-mcp`) plus a Typer CLI (`kelly`).
 
 See [ARCHITECTURE_PLAN.md](ARCHITECTURE_PLAN.md) for the design doc.
 
@@ -41,7 +41,7 @@ poetry run ruff format .
 
 ## Configuration & secrets
 
-- **No API keys required.** `pyairbnb` and `patchright` work key-free; everything else is local SQLite.
+- **One optional key:** `LITEAPI_API_KEY` (in `.env`) enables hotel search. Without it, the hotel shortlist returns an `error` string and Airbnb still runs. Eurostar + Airbnb are key-free.
 - **`.env` is optional** and is auto-loaded from the project root by `kelly.settings.find_project_root()` (walks upward for `pyproject.toml`, or reads `KELLY_PROJECT_ROOT`). Only override env vars are accepted; see `.env.example`.
 - **kelly.md** is the trip config: YAML frontmatter (`currency`, `history_window_days`) + GFM tables under `## Trains` and `## Stays`. Parser is in `src/kelly/md_config.py`. See [`config/kelly.example.md`](config/kelly.example.md).
 - Trip-id convention: trains live under `<trip_id>-out` and `<trip_id>-back` (or a single `<trip_id>` for one-way), the stay shares `<trip_id>`.
@@ -50,8 +50,9 @@ poetry run ruff format .
 
 ```
 kelly.md  →  md_config (Pydantic)  →  trip_planner.plan_trip(trip_id)
-                                          ├── train_service → playwright_eurostar (patchright)
-                                          ├── stay_service  → providers/airbnb (pyairbnb)
+                                          ├── train_service  → playwright_eurostar (patchright)
+                                          ├── stay_service   → providers/airbnb (pyairbnb)
+                                          ├── hotel_service  → providers/liteapi_hotels (REST)
                                           └── shortlist + history append (SqliteHistoryStore)
 ```
 
@@ -60,9 +61,9 @@ Layer responsibilities:
 | Layer | Code | What it does |
 |-------|------|--------------|
 | **Config** | `md_config.py` | Pydantic v2 models (`TrainRow`, `StayRow`, `KellyFrontmatter`, `KellyConfig`); GFM table parser; section finder. |
-| **Providers** | `providers/airbnb.py`, `providers/playwright_eurostar.py` | Direct external calls. Lazy-imports `pyairbnb` / `patchright` so the module loads even without browsers/deps; surfaces a clean `error` string on the result if so. |
-| **Services** | `services/train_service.py`, `services/stay_service.py`, `services/trip_planner.py` | Orchestrate provider calls, persist to history, build the curated shortlist (Eurostar 9-pax cap → Groups Desk hint, Paris central bbox filter, deep-link URL pre-filling). |
-| **History** | `history_store.py` | `SqliteHistoryStore` with `train_observations` and `stay_observations` tables; `train_key()` / `stay_key()` helpers; `open_default_store()` opens at `KELLY_DATA_DIR/kelly_history.sqlite`. |
+| **Providers** | `providers/airbnb.py`, `providers/playwright_eurostar.py`, `providers/liteapi_hotels.py` | Direct external calls. Lazy-imports / lazy-reads-env so the modules load even without browsers/deps/keys; each surfaces a clean `error` string on the result when prereqs are missing. |
+| **Services** | `services/train_service.py`, `services/stay_service.py`, `services/hotel_service.py`, `services/trip_planner.py` | Orchestrate provider calls, persist to history, build the curated shortlists (Eurostar 9-pax cap → Groups Desk hint, Paris central bbox filter, deep-link URL pre-filling, hotel composite-score ranking). |
+| **History** | `history_store.py` | `SqliteHistoryStore` with `train_observations`, `stay_observations`, `hotel_observations` tables; `train_key()` / `stay_key()` / `hotel_key()` helpers; `open_default_store()` opens at `KELLY_DATA_DIR/kelly_history.sqlite`. |
 | **MCP / CLI** | `mcp_server.py`, `cli.py` | Thin transport wrappers over `services/*`. Tools return JSON strings (use `json.dumps(..., default=str)` because outputs contain `Decimal` and `date`). |
 
 ### Eurostar fare bands
