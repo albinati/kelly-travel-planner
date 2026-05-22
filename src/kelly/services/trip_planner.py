@@ -9,11 +9,13 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from kelly.history_store import SqliteHistoryStore
 from kelly.md_config import KellyConfig, TrainRow
 from kelly.providers.airbnb import AirbnbListing, AirbnbSearchResult
+from kelly.providers.liteapi_hotels import HotelListing, HotelSearchResult
 from kelly.providers.playwright_eurostar import (
     EurostarJourney,
     EurostarSearchResult,
     classify_passengers,
 )
+from kelly.services.hotel_service import hotel_result_to_jsonable, search_hotel
 from kelly.services.stay_service import search_stay, stay_result_to_jsonable
 from kelly.services.train_service import search_train, train_result_to_jsonable
 
@@ -44,6 +46,15 @@ def _coords_in_central_paris(listing: AirbnbListing) -> bool:
     )
 
 
+def _hotel_in_central_paris(h: HotelListing) -> bool:
+    if h.lat is None or h.lng is None:
+        return False
+    return (
+        _CENTRAL_PARIS_BBOX["min_lat"] <= h.lat <= _CENTRAL_PARIS_BBOX["max_lat"]
+        and _CENTRAL_PARIS_BBOX["min_lng"] <= h.lng <= _CENTRAL_PARIS_BBOX["max_lng"]
+    )
+
+
 def _airbnb_book_url(
     listing_id: str, check_in: str, check_out: str, adults: int, children: int, infants: int
 ) -> str:
@@ -53,6 +64,143 @@ def _airbnb_book_url(
         f"?check_in={check_in}&check_out={check_out}"
         f"&adults={adults}&children={children}&infants={infants}"
     )
+
+
+def _normalize_inverse(value: float | None, lo: float, hi: float) -> float:
+    """Map *value* in [lo, hi] to [0, 1] where lo→1 and hi→0 (cheaper is better).
+    Missing values → 0.5 neutral so they neither over- nor under-perform.
+    """
+    if value is None or hi <= lo:
+        return 0.5
+    return max(0.0, min(1.0, (hi - value) / (hi - lo)))
+
+
+def _normalize(value: float | None, lo: float, hi: float) -> float:
+    if value is None or hi <= lo:
+        return 0.5
+    return max(0.0, min(1.0, (value - lo) / (hi - lo)))
+
+
+def _google_hotels_url(name: str | None, city: str | None) -> str | None:
+    """Google Hotels search deep-link — bridge until the Kelly UI ships the
+    LiteAPI prebook+book flow (v2 plan). Opens with the hotel name pre-queried
+    so the user can verify availability + sanity-check the price."""
+    if not name:
+        return None
+    from urllib.parse import quote_plus
+
+    q = f"{name} {city}" if city else name
+    return f"https://www.google.com/travel/search?q={quote_plus(q)}"
+
+
+def _hotel_shortlist(
+    res: HotelSearchResult,
+    *,
+    require_central: bool,
+    max_total: float | None,
+    take: int = 5,
+) -> list[dict[str, Any]]:
+    """Rank hotels by a composite score: cheaper + more stars + higher user
+    rating + more reviews. Factor weights are explicit so the front (v2) can
+    surface a "why this ranks first" breakdown next to each card.
+    """
+    cands: list[HotelListing] = list(res.listings)
+    if require_central:
+        cands = [h for h in cands if _hotel_in_central_paris(h)]
+
+    # Use the all-in price (incl. pay-on-arrival taxes) when available — this
+    # is what we compare against Airbnb's regulated total. Hotels without a
+    # full-rate hit fall back to the base price.
+    def _ref_price(h: HotelListing) -> Decimal | None:
+        return h.price_all_in if h.price_all_in is not None else h.price_total
+
+    if max_total is not None:
+        cap = Decimal(str(max_total))
+        cands = [h for h in cands if _ref_price(h) is None or (_ref_price(h) or cap) <= cap]
+    if not cands:
+        return []
+
+    priced = [h for h in cands if _ref_price(h) is not None]
+    if priced:
+        prices = [float(_ref_price(h) or 0) for h in priced]
+        p_lo, p_hi = min(prices), max(prices)
+    else:
+        p_lo, p_hi = 0.0, 1.0
+
+    rated = [h.rating for h in cands if h.rating is not None]
+    r_lo, r_hi = (min(rated), max(rated)) if rated else (0.0, 10.0)
+
+    reviewed = [h.review_count for h in cands if h.review_count is not None]
+    rc_lo, rc_hi = (min(reviewed), max(reviewed)) if reviewed else (0, 1)
+    # log-scale review count so 50 vs 500 reviews isn't a 10x signal
+    from math import log10
+
+    weights = {"price": 0.40, "stars": 0.25, "rating": 0.20, "reviews": 0.15}
+
+    scored: list[tuple[float, dict[str, float], HotelListing]] = []
+    for h in cands:
+        ref = _ref_price(h)
+        price_n = _normalize_inverse(
+            float(ref) if ref is not None else None, p_lo, p_hi
+        )
+        stars_n = _normalize(h.stars, 1.0, 5.0)
+        rating_n = _normalize(h.rating, r_lo, r_hi) if rated else 0.5
+        if h.review_count is not None and rc_hi > 0:
+            reviews_n = _normalize(
+                log10(max(1, h.review_count)),
+                log10(max(1, rc_lo)),
+                log10(max(1, rc_hi)),
+            )
+        else:
+            reviews_n = 0.5
+
+        factors = {
+            "price": round(price_n, 3),
+            "stars": round(stars_n, 3),
+            "rating": round(rating_n, 3),
+            "reviews": round(reviews_n, 3),
+        }
+        score = (
+            weights["price"] * price_n
+            + weights["stars"] * stars_n
+            + weights["rating"] * rating_n
+            + weights["reviews"] * reviews_n
+        )
+        scored.append((score, factors, h))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    out: list[dict[str, Any]] = []
+    for score, factors, h in scored[:take]:
+        out.append(
+            {
+                "id": h.id,
+                "name": h.name,
+                "stars": h.stars,
+                "rating": h.rating,
+                "review_count": h.review_count,
+                "price_total": str(h.price_total) if h.price_total is not None else None,
+                "price_all_in": str(h.price_all_in) if h.price_all_in is not None else None,
+                "taxes_at_property": (
+                    str(h.taxes_at_property) if h.taxes_at_property is not None else None
+                ),
+                "suggested_price": (
+                    str(h.suggested_price) if h.suggested_price is not None else None
+                ),
+                "currency": h.currency,
+                "address": h.address,
+                "city": h.city,
+                "lat": h.lat,
+                "lng": h.lng,
+                "main_photo": h.main_photo,
+                "board_type": h.board_type,
+                "refundable": h.refundable,
+                "offer_id": h.offer_id,
+                "search_url": _google_hotels_url(h.name, h.city),
+                "score": round(score, 4),
+                "factors": factors,
+            }
+        )
+    return out
 
 
 def _airbnb_shortlist(
@@ -256,11 +404,22 @@ def plan_trip(
 
     stays: dict[str, Any] = {}
     stay_result: AirbnbSearchResult | None = None
+    hotel_result: HotelSearchResult | None = None
     if stay is not None:
         stay_result = search_stay(cfg, stay, store=store, persist=persist)
         stays["primary"] = {
             "row": stay.model_dump(mode="json"),
             "result": stay_result_to_jsonable(stay_result),
+        }
+        # Hotel fan-out via LiteAPI runs alongside Airbnb so the shortlist can
+        # surface both options for the user to compare. Errors (missing API
+        # key, unmappable country) come back inside the result as ``error``
+        # and are exposed below in the JSON payload — the Airbnb side keeps
+        # working regardless.
+        hotel_result = search_hotel(cfg, stay, store=store, persist=persist)
+        stays["hotel"] = {
+            "row": stay.model_dump(mode="json"),
+            "result": hotel_result_to_jsonable(hotel_result),
         }
 
     # Curate
@@ -286,6 +445,12 @@ def plan_trip(
             children=children,
             infants=infants,
         )
+        if hotel_result is not None:
+            shortlist["hotels"] = _hotel_shortlist(
+                hotel_result,
+                require_central=require_central,
+                max_total=stay.max_total,
+            )
     for label, (r, row) in train_results.items():
         pax = classify_passengers(
             row.adults, row.seniors, row.teens, list(row.children_ages or [])

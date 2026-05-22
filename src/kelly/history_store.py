@@ -32,6 +32,10 @@ def stay_key(area: str, check_in: date, check_out: date) -> str:
     return f"{area.strip().lower()}|{check_in.isoformat()}|{check_out.isoformat()}"
 
 
+def hotel_key(area: str, check_in: date, check_out: date) -> str:
+    return f"{area.strip().lower()}|{check_in.isoformat()}|{check_out.isoformat()}"
+
+
 @dataclass
 class TrainObservation:
     """One per train search call — captures the cheapest per-adult fare seen
@@ -71,6 +75,32 @@ class StayObservation:
     listings_count: int
     bedrooms_min: int | None
     pax_adult_eq: int  # adults + 13+
+    pax_child: int
+    pax_infant: int
+    raw_json: str | None = None
+
+
+@dataclass
+class HotelObservation:
+    """One per hotel search call (LiteAPI) — same shape as StayObservation but
+    *rooms_count* in place of bedrooms_min (hotels book rooms, not properties).
+    Kept in its own table because price semantics differ: hotel totals sum
+    multi-room rates, Airbnb totals are whole-listing.
+    """
+
+    trip_key: str
+    trip_row_id: str | None
+    area: str
+    check_in: str
+    check_out: str
+    nights: int
+    days_before_check_in: int
+    best_total_amount: float | None
+    currency: str | None
+    listings_count: int
+    rooms_count: int | None
+    min_stars: float | None
+    pax_adult_eq: int
     pax_child: int
     pax_infant: int
     raw_json: str | None = None
@@ -120,6 +150,29 @@ CREATE TABLE IF NOT EXISTS stay_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_stay_trip_time
     ON stay_observations(trip_key, observed_at);
+
+CREATE TABLE IF NOT EXISTS hotel_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    observed_at TEXT NOT NULL,
+    trip_key TEXT NOT NULL,
+    trip_row_id TEXT,
+    area TEXT NOT NULL,
+    check_in TEXT NOT NULL,
+    check_out TEXT NOT NULL,
+    nights INTEGER NOT NULL,
+    days_before_check_in INTEGER NOT NULL,
+    best_total_amount REAL,
+    currency TEXT,
+    listings_count INTEGER NOT NULL,
+    rooms_count INTEGER,
+    min_stars REAL,
+    pax_adult_eq INTEGER NOT NULL,
+    pax_child INTEGER NOT NULL,
+    pax_infant INTEGER NOT NULL,
+    raw_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_hotel_trip_time
+    ON hotel_observations(trip_key, observed_at);
 """
 
 
@@ -192,6 +245,38 @@ class SqliteHistoryStore:
             conn.commit()
             return int(cur.lastrowid or 0)
 
+    def append_hotel(self, obs: HotelObservation) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        cols = [
+            "observed_at",
+            "trip_key",
+            "trip_row_id",
+            "area",
+            "check_in",
+            "check_out",
+            "nights",
+            "days_before_check_in",
+            "best_total_amount",
+            "currency",
+            "listings_count",
+            "rooms_count",
+            "min_stars",
+            "pax_adult_eq",
+            "pax_child",
+            "pax_infant",
+            "raw_json",
+        ]
+        row = {**asdict(obs), "observed_at": now}
+        values = [row[c] for c in cols]
+        placeholders = ",".join("?" * len(cols))
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                f"INSERT INTO hotel_observations ({','.join(cols)}) VALUES ({placeholders})",
+                values,
+            )
+            conn.commit()
+            return int(cur.lastrowid or 0)
+
     def fetch_train_amounts(
         self, key: str, *, window_days: int = 90
     ) -> list[float]:
@@ -218,6 +303,23 @@ class SqliteHistoryStore:
             cur = conn.execute(
                 """
                 SELECT best_total_amount FROM stay_observations
+                WHERE trip_key = ? AND observed_at >= ?
+                  AND best_total_amount IS NOT NULL
+                ORDER BY observed_at ASC
+                """,
+                (key, cutoff_iso),
+            )
+            return [float(r[0]) for r in cur]
+
+    def fetch_hotel_amounts(
+        self, key: str, *, window_days: int = 90
+    ) -> list[float]:
+        cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
+        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                SELECT best_total_amount FROM hotel_observations
                 WHERE trip_key = ? AND observed_at >= ?
                   AND best_total_amount IS NOT NULL
                 ORDER BY observed_at ASC
