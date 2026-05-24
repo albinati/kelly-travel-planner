@@ -88,7 +88,12 @@ Honoured by the URL params in `playwright_eurostar.py`:
 
 ## MCP server
 
-`src/kelly/mcp_server.py` defines all `@mcp.tool()` and `@mcp.resource(...)` functions against a single `FastMCP` instance. **4 tools + 1 resource:** `kelly_load_config`, `kelly_eurostar_search`, `kelly_airbnb_search`, `kelly_plan_trip`, plus the `kelly://config` resource (the current `kelly.md` as Markdown). Tools accept `persist: bool = True`; pass `False` to skip the SQLite append.
+`src/kelly/mcp_server.py` defines all `@mcp.tool()` and `@mcp.resource(...)` functions against a single `FastMCP` instance. **7 tools + 1 resource:**
+
+- **Planning** (4): `kelly_load_config`, `kelly_eurostar_search`, `kelly_airbnb_search`, `kelly_plan_trip` — accept `persist: bool = True`; pass `False` to skip the SQLite append.
+- **Operating** (2): `kelly_log_expense(description, amount, currency="GBP", paid_by_me=True)` and `kelly_expense_balances()` — Splitwise group is hardcoded to `Family-London2026` (id `97871346`) and descriptions get auto-prefixed with `[paris-disney-2026-08]`. Both return `{"error": "..."}` JSON if `SPLITWISE_API_KEY` is absent.
+- **Calendar drafts** (1): `kelly_booking_event_draft(booking, depart_time=None, arrive_time=None, disney_date=None)` — returns a Google Calendar event spec (`summary, location, description, start/end with timeZone`) for `"airbnb"`, `"eurostar_out"`, `"eurostar_back"`, or `"disney"`. Kelly never calls the Google Calendar API itself — the agent passes the spec to its own Calendar MCP tool to create the event.
+- **Resource:** `kelly://config` — the current `kelly.md` as Markdown.
 
 ## Testing notes
 
