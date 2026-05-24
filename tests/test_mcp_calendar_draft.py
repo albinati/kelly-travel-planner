@@ -26,6 +26,14 @@ def test_eurostar_out_default_times_with_correct_timezones() -> None:
     assert "LON" in data["summary"] and "PAR" in data["summary"]
 
 
+def test_eurostar_back_default_matches_booking() -> None:
+    # Default reflects the actual booked train (ref REDACTED_REF): 20:02→21:30 on 21 Aug.
+    data = json.loads(kelly_booking_event_draft("eurostar_back"))
+    assert data["start"] == {"dateTime": "2026-08-21T20:02:00", "timeZone": "Europe/Paris"}
+    assert data["end"] == {"dateTime": "2026-08-21T21:30:00", "timeZone": "Europe/London"}
+    assert "20:02" in data["summary"] and "21:30" in data["summary"]
+
+
 def test_eurostar_back_accepts_depart_arrive_override() -> None:
     data = json.loads(
         kelly_booking_event_draft("eurostar_back", depart_time="20:02", arrive_time="21:30")

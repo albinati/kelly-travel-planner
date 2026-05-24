@@ -312,8 +312,10 @@ _EUROSTAR_LEGS = {
         "date": "2026-08-21",
         "origin_tz": "Europe/Paris",
         "destination_tz": "Europe/London",
-        "default_depart": "16:30",
-        "default_arrive": "18:00",
+        # 20:02→21:30 is the actual booked time (ref REDACTED_REF) — the earlier
+        # 16:30 slot we'd recommended sold out by the time of booking.
+        "default_depart": "20:02",
+        "default_arrive": "21:30",
     },
 }
 
