@@ -113,6 +113,48 @@ def find_group_by_name(client: httpx.Client, name: str) -> SplitwiseGroup | None
     return None
 
 
+def get_group(client: httpx.Client, group_id: int) -> dict[str, Any]:
+    """Return the raw ``/get_group/{id}`` payload — members include per-currency
+    balances and the response includes the simplified-debt graph. The MCP tool
+    layer relativizes against the current user; this stays close to the wire."""
+    r = client.get(f"/get_group/{group_id}")
+    r.raise_for_status()
+    return dict(r.json().get("group") or {})
+
+
+def get_group_balances(client: httpx.Client, group_id: int) -> dict[str, Any]:
+    """Return ``{members: [...], simplified_debts: [...]}`` for *group_id*.
+
+    Members carry their per-currency balance:
+        [{"id", "name", "email", "balance": [{"currency_code", "amount"}, ...]}]
+    Positive *amount* = others owe this member; negative = this member owes.
+
+    *simplified_debts* is Splitwise's minimal transfer set:
+        [{"from": user_id, "to": user_id, "amount": "609.57", "currency_code": "GBP"}, ...]
+
+    Both views are returned because they're useful for different prompts —
+    "who owes me?" vs "what's the settle-up plan?".
+    """
+    g = get_group(client, group_id)
+    members: list[dict[str, Any]] = []
+    for m in g.get("members") or []:
+        u = _user_from_dict(m)
+        members.append(
+            {
+                "id": u.id,
+                "name": u.display_name,
+                "email": u.email,
+                "balance": list(m.get("balance") or []),
+            }
+        )
+    return {
+        "group_id": int(g.get("id") or group_id),
+        "name": g.get("name") or "",
+        "members": members,
+        "simplified_debts": [dict(d) for d in (g.get("simplified_debts") or [])],
+    }
+
+
 def create_expense(
     client: httpx.Client,
     *,
