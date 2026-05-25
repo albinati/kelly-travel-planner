@@ -43,8 +43,8 @@ poetry run ruff format .
 
 - **One optional key:** `LITEAPI_API_KEY` (in `.env`) enables hotel search. Without it, the hotel shortlist returns an `error` string and Airbnb still runs. Eurostar + Airbnb are key-free.
 - **`.env` is optional** and is auto-loaded from the project root by `kelly.settings.find_project_root()` (walks upward for `pyproject.toml`, or reads `KELLY_PROJECT_ROOT`). Only override env vars are accepted; see `.env.example`.
-- **kelly.md** is the trip config: YAML frontmatter (`currency`, `history_window_days`) + GFM tables under `## Trains` and `## Stays`. Parser is in `src/kelly/md_config.py`. See [`config/kelly.example.md`](config/kelly.example.md).
-- Trip-id convention: trains live under `<trip_id>-out` and `<trip_id>-back` (or a single `<trip_id>` for one-way), the stay shares `<trip_id>`.
+- **kelly.md** is the trip config: YAML frontmatter (`currency`, `history_window_days`) + GFM tables under `## Trains`, `## Stays`, `## Hosting`, `## Daytrips`. Parser is in `src/kelly/md_config.py`. See [`config/kelly.example.md`](config/kelly.example.md).
+- Trip-id convention: trains live under `<trip_id>-out` and `<trip_id>-back` (or a single `<trip_id>` for one-way), the stay shares `<trip_id>`. For hosting-style arcs (visitors staying at the host's home), use `## Hosting` rows; `DaytripRow`s with the same `trip_id` attach excursions to that arc.
 
 ## Architecture
 
@@ -60,10 +60,11 @@ Layer responsibilities:
 
 | Layer | Code | What it does |
 |-------|------|--------------|
-| **Config** | `md_config.py` | Pydantic v2 models (`TrainRow`, `StayRow`, `KellyFrontmatter`, `KellyConfig`); GFM table parser; section finder. |
-| **Providers** | `providers/airbnb.py`, `providers/playwright_eurostar.py`, `providers/liteapi_hotels.py` | Direct external calls. Lazy-imports / lazy-reads-env so the modules load even without browsers/deps/keys; each surfaces a clean `error` string on the result when prereqs are missing. |
-| **Services** | `services/train_service.py`, `services/stay_service.py`, `services/hotel_service.py`, `services/trip_planner.py` | Orchestrate provider calls, persist to history, build the curated shortlists (Eurostar 9-pax cap → Groups Desk hint, Paris central bbox filter, deep-link URL pre-filling, hotel composite-score ranking). |
-| **History** | `history_store.py` | `SqliteHistoryStore` with `train_observations`, `stay_observations`, `hotel_observations` tables; `train_key()` / `stay_key()` / `hotel_key()` helpers; `open_default_store()` opens at `KELLY_DATA_DIR/kelly_history.sqlite`. |
+| **Config** | `md_config.py` | Pydantic v2 models (`TrainRow`, `StayRow`, `HostingRow`, `DaytripRow`, `KellyFrontmatter`, `KellyConfig`); GFM table parser; section finder. |
+| **Providers** | `providers/airbnb.py`, `providers/playwright_eurostar.py`, `providers/liteapi_hotels.py`, `providers/splitwise.py` | Direct external calls. Lazy-imports / lazy-reads-env so the modules load even without browsers/deps/keys; each surfaces a clean `error` string on the result when prereqs are missing. |
+| **Services** | `services/train_service.py`, `services/stay_service.py`, `services/hotel_service.py`, `services/trip_planner.py`, `services/booking_service.py`, `services/fx_service.py`, `services/summary_service.py`, `services/hosting_service.py` | Orchestrate provider calls, persist to history, build curated shortlists, log booked artifacts, normalise across currencies (ECB-cached), aggregate trip cost rollups, estimate hosting-window costs. |
+| **History** | `history_store.py` | `SqliteHistoryStore` with `train_observations`, `stay_observations`, `hotel_observations`, `bookings`, and `fx_rates` tables; `train_key()` / `stay_key()` / `hotel_key()` helpers; `open_default_store()` opens at `KELLY_DATA_DIR/kelly_history.sqlite`. Bookings is latest-per-leg on fetch; `fx_rates` is UNIQUE on `(as_of, base, quote, source)` so refetch is idempotent. |
+| **Metadata** | `booking_metadata.py` | Static operational metadata (locations, timezones, default times) for the calendar-draft tool. The *money* side of any booking lives in the `bookings` table — never in this module. |
 | **MCP / CLI** | `mcp_server.py`, `cli.py` | Thin transport wrappers over `services/*`. Tools return JSON strings (use `json.dumps(..., default=str)` because outputs contain `Decimal` and `date`). |
 
 ### Eurostar fare bands
@@ -88,11 +89,13 @@ Honoured by the URL params in `playwright_eurostar.py`:
 
 ## MCP server
 
-`src/kelly/mcp_server.py` defines all `@mcp.tool()` and `@mcp.resource(...)` functions against a single `FastMCP` instance. **7 tools + 1 resource:**
+`src/kelly/mcp_server.py` defines all `@mcp.tool()` and `@mcp.resource(...)` functions against a single `FastMCP` instance. **11 tools + 1 resource:**
 
 - **Planning** (4): `kelly_load_config`, `kelly_eurostar_search`, `kelly_airbnb_search`, `kelly_plan_trip` — accept `persist: bool = True`; pass `False` to skip the SQLite append.
-- **Operating** (2): `kelly_log_expense(description, amount, currency="GBP", paid_by_me=True)` and `kelly_expense_balances()` — Splitwise group is hardcoded to `Family-London2026` (id `97871346`) and descriptions get auto-prefixed with `[paris-disney-2026-08]`. Both return `{"error": "..."}` JSON if `SPLITWISE_API_KEY` is absent.
-- **Calendar drafts** (1): `kelly_booking_event_draft(booking, depart_time=None, arrive_time=None, disney_date=None)` — returns a Google Calendar event spec (`summary, location, description, start/end with timeZone`) for `"airbnb"`, `"eurostar_out"`, `"eurostar_back"`, or `"disney"`. Kelly never calls the Google Calendar API itself — the agent passes the spec to its own Calendar MCP tool to create the event.
+- **Bookings + rollup** (3): `kelly_log_booking(trip_id, leg, provider, total_amount, currency, confirmation_ref, paid_at, paid_by)` writes an append-only row to the `bookings` table; `kelly_trip_summary(trip_id, currency="GBP")` aggregates all legs into a target currency; `kelly_convert(amount, from_ccy, to_ccy, as_of?)` is the ECB-cached FX converter both rely on.
+- **Hosting** (1): `kelly_estimate_hosting(hosting_id, currency?, host_household_size=2, config_path?)` computes the marginal cost of hosting a visiting party from a `## Hosting` row + matching `## Daytrips`. Formula in `services/hosting_service.py`.
+- **Splitwise** (2): `kelly_log_expense(description, amount, currency="GBP", paid_by_me=True)` and `kelly_expense_balances()` — group is hardcoded to `Family-London2026` (id `97871346`) and descriptions get auto-prefixed with `[paris-disney-2026-08]`. Both return `{"error": "..."}` JSON if `SPLITWISE_API_KEY` is absent.
+- **Calendar drafts** (1): `kelly_booking_event_draft(booking, depart_time=None, arrive_time=None, disney_date=None)` — returns a Google Calendar event spec (`summary, location, description, start/end with timeZone`) for `"airbnb"`, `"eurostar_out"`, `"eurostar_back"`, or `"disney"`. The `Total paid:` line is read from the `bookings` table at runtime; shows "(not yet logged)" until you log. Kelly never calls the Google Calendar API itself — the agent passes the spec to its own Calendar MCP tool to create the event.
 - **Resource:** `kelly://config` — the current `kelly.md` as Markdown.
 
 ## Testing notes
