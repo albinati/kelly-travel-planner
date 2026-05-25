@@ -16,6 +16,7 @@ except ImportError as e:
         "The `mcp` package is required. Install with: poetry install --extras mcp"
     ) from e
 
+from kelly.booking_metadata import AIRBNB, DISNEY, EUROSTAR_LEGS, format_money
 from kelly.history_store import open_default_store
 from kelly.md_config import StayRow, TrainRow, load_kelly_config
 from kelly.providers.splitwise import (
@@ -27,6 +28,7 @@ from kelly.providers.splitwise import (
     get_group,
     get_group_balances,
 )
+from kelly.services.booking_service import booking_total_for_leg, log_booking
 from kelly.services.stay_service import search_stay, stay_result_to_jsonable
 from kelly.services.train_service import search_train, train_result_to_jsonable
 from kelly.services.trip_planner import plan_trip
@@ -261,7 +263,9 @@ def kelly_expense_balances() -> str:
             me_view.append({"direction": "you_owe", "to": other, "amount": amount, "currency": cur})
         elif to_id == me.id:
             other = members_by_id.get(from_id, {}).get("name", f"user_{from_id}")
-            me_view.append({"direction": "owed_to_you", "from": other, "amount": amount, "currency": cur})
+            me_view.append(
+                {"direction": "owed_to_you", "from": other, "amount": amount, "currency": cur}
+            )
 
     return json.dumps(
         {
@@ -276,61 +280,68 @@ def kelly_expense_balances() -> str:
     )
 
 
-# --- Calendar event drafts --------------------------------------------------
-# Hardcoded booking data extracted from the user's Gmail Airbnb confirmation
-# (thread 19e5abed75c15397). Lives here instead of kelly.md because the kelly.md
-# config models the *search* (party, dates, area), not the booked artifact.
-_AIRBNB_BOOKING = {
-    "summary": "Airbnb Paris — UrbanFlat 115 (HMESRSXD98)",
-    "location": "218 Rue St Denis, 75002 Paris, France",
-    "host": "Urban Flat",
-    "check_in_date": "2026-08-18",
-    "check_in_time": "16:00",  # "After 16:00" per the receipt
-    "check_out_date": "2026-08-21",
-    "check_out_time": "11:00",  # "By 11:00" per the receipt
-    "confirmation_code": "HMESRSXD98",
-    "guests": "up to 10",
-    "total_paid": "£1,219.14",
-    "url": "https://www.airbnb.co.uk/reservation/itinerary?code=HMESRSXD98",
-}
+# --- Bookings + calendar event drafts ---------------------------------------
+# Static operational metadata (locations, timezones, default times) lives in
+# `kelly.booking_metadata`. The *money* lives in the SQLite `bookings` table
+# and is fetched at draft-time so confirmations stay in sync after correction.
 
-_EUROSTAR_LEGS = {
-    "out": {
-        "summary_fmt": "Eurostar LON→PAR ({depart}–{arrive})",
-        "origin": "St Pancras International, London",
-        "destination": "Gare du Nord, Paris",
-        "date": "2026-08-18",
-        "origin_tz": "Europe/London",
-        "destination_tz": "Europe/Paris",
-        "default_depart": "12:01",
-        "default_arrive": "15:30",
-    },
-    "back": {
-        "summary_fmt": "Eurostar PAR→LON ({depart}–{arrive})",
-        "origin": "Gare du Nord, Paris",
-        "destination": "St Pancras International, London",
-        "date": "2026-08-21",
-        "origin_tz": "Europe/Paris",
-        "destination_tz": "Europe/London",
-        # 20:02→21:30 is the actual booked time (ref TGDJKR) — the earlier
-        # 16:30 slot we'd recommended sold out by the time of booking.
-        "default_depart": "20:02",
-        "default_arrive": "21:30",
-    },
-}
 
-_DISNEY_BOOKING = {
-    "summary": "Disneyland Paris (day visit)",
-    "location": "Marne-la-Vallée–Chessy, Disneyland Paris, 77777 Marne-la-Vallée, France",
-    "tz": "Europe/Paris",
-    "default_date": "2026-08-20",  # Thursday — middle of trip per the user's earlier roteiro
-    "default_start_time": "09:00",
-    "default_end_time": "22:00",
-    "notes": (
-        "Take RER A from Châtelet-Les Halles / Gare de Lyon / Nation directly to "
-        "Marne-la-Vallée–Chessy (~40min). Park gates open earlier; closing varies."
-    ),
-}
+def _total_paid_str(trip_id: str, leg: str) -> str:
+    pair = booking_total_for_leg(trip_id, leg)
+    if pair is None:
+        return "(not yet logged)"
+    amount, currency = pair
+    return format_money(amount, currency)
+
+
+@mcp.tool()
+def kelly_log_booking(
+    trip_id: str,
+    leg: str,
+    provider: str,
+    total_amount: str,
+    currency: str = "GBP",
+    confirmation_ref: str | None = None,
+    paid_at: str | None = None,
+    paid_by: str = "me",
+) -> str:
+    """Log an actual booked artifact (with its money) to the bookings store.
+
+    ``leg`` is a free-form identifier scoped to the trip — conventionally
+    ``"airbnb"``, ``"eurostar_out"``, ``"eurostar_back"``, ``"disney_tickets"``.
+    ``total_amount`` is a string to preserve Decimal precision (pass ``"1219.14"``).
+    ``paid_at`` is an ISO date (YYYY-MM-DD); ``paid_by`` is a free-form label.
+
+    Append-only: re-logging the same ``(trip_id, leg)`` adds a new row and the
+    latest wins in fetches. Returns JSON with the persisted record.
+    """
+    try:
+        row_id, rec = log_booking(
+            trip_id=trip_id,
+            leg=leg,
+            provider=provider,
+            total_amount=total_amount,
+            currency=currency,
+            confirmation_ref=confirmation_ref,
+            paid_at=paid_at,
+            paid_by=paid_by,
+        )
+    except Exception as e:
+        return json.dumps({"error": f"failed to log booking: {e}"})
+    return json.dumps(
+        {
+            "id": row_id,
+            "trip_id": rec.trip_id,
+            "leg": rec.leg,
+            "provider": rec.provider,
+            "confirmation_ref": rec.confirmation_ref,
+            "total_amount": rec.total_amount,
+            "currency": rec.currency,
+            "paid_at": rec.paid_at,
+            "paid_by": rec.paid_by,
+        },
+        default=str,
+    )
 
 
 @mcp.tool()
@@ -350,21 +361,25 @@ def kelly_booking_event_draft(
       - ``"airbnb"`` — Airbnb stay, full check-in→checkout span.
       - ``"eurostar_out"`` — outbound Eurostar leg. Pass *depart_time* and
         *arrive_time* (HH:MM) to override the planner's recommendation (12:01→15:30).
-      - ``"eurostar_back"`` — return Eurostar leg. Same overrides (default 16:30→18:00).
+      - ``"eurostar_back"`` — return Eurostar leg. Same overrides (default 20:02→21:30).
       - ``"disney"`` — Disney day visit. Pass *disney_date* (YYYY-MM-DD) to override
         the default 2026-08-20.
+
+    The ``Total paid:`` line in the description is read from the bookings table
+    at runtime; if no booking has been logged yet, it shows "(not yet logged)".
 
     Returns JSON: ``{summary, location, description, start: {dateTime, timeZone},
                      end: {dateTime, timeZone}}``.
     """
     b = booking.strip().lower()
     if b == "airbnb":
-        a = _AIRBNB_BOOKING
+        a = AIRBNB
+        total = _total_paid_str(a["trip_id"], a["leg"])
         desc = (
             f"Host: {a['host']}\n"
             f"Confirmation code: {a['confirmation_code']}\n"
             f"Guests: {a['guests']}\n"
-            f"Total paid: {a['total_paid']}\n"
+            f"Total paid: {total}\n"
             f"Reservation: {a['url']}\n\n"
             f"Check-in after {a['check_in_time']}; checkout by {a['check_out_time']}."
         )
@@ -386,9 +401,10 @@ def kelly_booking_event_draft(
         )
 
     if b in ("eurostar_out", "eurostar_back"):
-        leg = _EUROSTAR_LEGS["out" if b == "eurostar_out" else "back"]
+        leg = EUROSTAR_LEGS["out" if b == "eurostar_out" else "back"]
         dep = depart_time or leg["default_depart"]
         arr = arrive_time or leg["default_arrive"]
+        total = _total_paid_str(leg["trip_id"], leg["leg"])
         return json.dumps(
             {
                 "summary": leg["summary_fmt"].format(depart=dep, arrive=arr),
@@ -397,6 +413,7 @@ def kelly_booking_event_draft(
                     f"Eurostar standard class.\n"
                     f"Depart {leg['origin']} at {dep} ({leg['origin_tz']}).\n"
                     f"Arrive {leg['destination']} at {arr} ({leg['destination_tz']}).\n"
+                    f"Total paid: {total}\n"
                     f"Party of 10 — split into 2 booking groups (5+4+1 lap infant)."
                 ),
                 "start": {
@@ -412,13 +429,14 @@ def kelly_booking_event_draft(
         )
 
     if b == "disney":
-        d = _DISNEY_BOOKING
+        d = DISNEY
         the_date = disney_date or d["default_date"]
+        total = _total_paid_str(d["trip_id"], d["leg"])
         return json.dumps(
             {
                 "summary": d["summary"],
                 "location": d["location"],
-                "description": d["notes"],
+                "description": f"{d['notes']}\n\nTotal paid: {total}",
                 "start": {
                     "dateTime": f"{the_date}T{d['default_start_time']}:00",
                     "timeZone": d["tz"],

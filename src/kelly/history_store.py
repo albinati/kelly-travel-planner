@@ -10,7 +10,9 @@ from pathlib import Path
 
 def days_before_departure(departure_date: date, observed_at: datetime | None = None) -> int:
     obs = observed_at or datetime.now(timezone.utc)
-    dep = datetime(departure_date.year, departure_date.month, departure_date.day, tzinfo=timezone.utc)
+    dep = datetime(
+        departure_date.year, departure_date.month, departure_date.day, tzinfo=timezone.utc
+    )
     delta = dep.date() - obs.date()
     return max(0, delta.days)
 
@@ -77,6 +79,23 @@ class StayObservation:
     pax_adult_eq: int  # adults + 13+
     pax_child: int
     pax_infant: int
+    raw_json: str | None = None
+
+
+@dataclass
+class BookingRecord:
+    """One booked artifact (train/stay/ticket) with its money + provenance.
+    Append-only: a corrected total is a new row, not an update — `fetch_bookings`
+    returns the latest per `(trip_id, leg)` unless `all_versions=True`."""
+
+    trip_id: str
+    leg: str  # "airbnb" | "eurostar_out" | "eurostar_back" | "disney_tickets" | ...
+    provider: str  # "airbnb" | "eurostar" | "disneyland_paris" | "liteapi" | "manual"
+    confirmation_ref: str | None
+    total_amount: float
+    currency: str  # ISO 4217 uppercase
+    paid_at: str | None  # ISO date
+    paid_by: str = "me"  # free-form for now; promoted to enum when ## Groups exists
     raw_json: str | None = None
 
 
@@ -173,6 +192,22 @@ CREATE TABLE IF NOT EXISTS hotel_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_hotel_trip_time
     ON hotel_observations(trip_key, observed_at);
+
+CREATE TABLE IF NOT EXISTS bookings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recorded_at TEXT NOT NULL,
+    trip_id TEXT NOT NULL,
+    leg TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    confirmation_ref TEXT,
+    total_amount REAL NOT NULL,
+    currency TEXT NOT NULL,
+    paid_at TEXT,
+    paid_by TEXT NOT NULL DEFAULT 'me',
+    raw_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_bookings_trip
+    ON bookings(trip_id, leg, recorded_at);
 """
 
 
@@ -277,9 +312,7 @@ class SqliteHistoryStore:
             conn.commit()
             return int(cur.lastrowid or 0)
 
-    def fetch_train_amounts(
-        self, key: str, *, window_days: int = 90
-    ) -> list[float]:
+    def fetch_train_amounts(self, key: str, *, window_days: int = 90) -> list[float]:
         cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
         cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
@@ -294,9 +327,7 @@ class SqliteHistoryStore:
             )
             return [float(r[0]) for r in cur]
 
-    def fetch_stay_amounts(
-        self, key: str, *, window_days: int = 90
-    ) -> list[float]:
+    def fetch_stay_amounts(self, key: str, *, window_days: int = 90) -> list[float]:
         cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
         cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
@@ -311,9 +342,77 @@ class SqliteHistoryStore:
             )
             return [float(r[0]) for r in cur]
 
-    def fetch_hotel_amounts(
-        self, key: str, *, window_days: int = 90
-    ) -> list[float]:
+    def record_booking(self, rec: BookingRecord) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        cols = [
+            "recorded_at",
+            "trip_id",
+            "leg",
+            "provider",
+            "confirmation_ref",
+            "total_amount",
+            "currency",
+            "paid_at",
+            "paid_by",
+            "raw_json",
+        ]
+        row = {**asdict(rec), "recorded_at": now}
+        row["currency"] = (row["currency"] or "").upper()
+        values = [row[c] for c in cols]
+        placeholders = ",".join("?" * len(cols))
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                f"INSERT INTO bookings ({','.join(cols)}) VALUES ({placeholders})",
+                values,
+            )
+            conn.commit()
+            return int(cur.lastrowid or 0)
+
+    def fetch_bookings(self, trip_id: str, *, all_versions: bool = False) -> list[BookingRecord]:
+        """Latest booking per (trip_id, leg) by default. Pass all_versions=True
+        to get the full append-only history for that trip."""
+        if all_versions:
+            query = """
+                SELECT trip_id, leg, provider, confirmation_ref, total_amount,
+                       currency, paid_at, paid_by, raw_json
+                FROM bookings
+                WHERE trip_id = ?
+                ORDER BY leg ASC, recorded_at ASC
+            """
+        else:
+            # Window function (SQLite 3.25+) — keep one row per leg, the latest.
+            query = """
+                SELECT trip_id, leg, provider, confirmation_ref, total_amount,
+                       currency, paid_at, paid_by, raw_json
+                FROM (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY leg ORDER BY recorded_at DESC
+                           ) AS rn
+                    FROM bookings
+                    WHERE trip_id = ?
+                )
+                WHERE rn = 1
+                ORDER BY leg ASC
+            """
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(query, (trip_id,))
+            return [
+                BookingRecord(
+                    trip_id=r[0],
+                    leg=r[1],
+                    provider=r[2],
+                    confirmation_ref=r[3],
+                    total_amount=float(r[4]),
+                    currency=r[5],
+                    paid_at=r[6],
+                    paid_by=r[7],
+                    raw_json=r[8],
+                )
+                for r in cur
+            ]
+
+    def fetch_hotel_amounts(self, key: str, *, window_days: int = 90) -> list[float]:
         cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
         cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
