@@ -118,6 +118,59 @@ class StayRow(BaseModel):
         return _parse_landmarks(v)
 
 
+class HostingRow(BaseModel):
+    """A visiting party staying at the user's home — used to estimate the
+    marginal household cost of hosting them (food delta, transit, outings,
+    optional weekend trip, buffer). ``trip_id`` ties this to a parent trip
+    arc shared with related DaytripRow rows."""
+
+    id: str
+    trip_id: str
+    visitor_party: str  # free-form label (e.g. "parents", "sister-family")
+    visitor_count: int = Field(..., ge=1, le=20)
+    dates_start: date
+    dates_end: date
+    currency: str = "GBP"
+    host_baseline_food_per_week: float = Field(default=0.0, ge=0)
+    host_baseline_dineout_per_outing: float = Field(default=0.0, ge=0)
+    host_baseline_transport_per_day: float = Field(default=0.0, ge=0)
+    planned_outings_count: int = Field(default=0, ge=0)
+    buffer_per_person: float = Field(default=0.0, ge=0)
+    max_total: float | None = None
+    notes: str = ""
+
+    @field_validator("currency", mode="before")
+    @classmethod
+    def upper_currency(cls, v: str) -> str:
+        return str(v).strip().upper()
+
+
+class DaytripRow(BaseModel):
+    """A daytrip or short overnight excursion attached to a hosting/trip arc.
+    Pure storage right now — eventually feeds a daytrip cost estimator."""
+
+    id: str
+    trip_id: str
+    destination: str
+    mode: str = "train"  # train|car|coach|tube|other
+    date: date
+    pax: int = Field(default=1, ge=1, le=30)
+    est_cost_per_pp: float = Field(default=0.0, ge=0)
+    currency: str = "GBP"
+    includes_overnight: bool = False
+    notes: str = ""
+
+    @field_validator("currency", mode="before")
+    @classmethod
+    def upper_currency(cls, v: str) -> str:
+        return str(v).strip().upper()
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def lower_mode(cls, v: str) -> str:
+        return str(v).strip().lower() or "train"
+
+
 class KellyFrontmatter(BaseModel):
     """YAML front matter defaults."""
 
@@ -131,6 +184,8 @@ class KellyConfig(BaseModel):
     frontmatter: KellyFrontmatter
     trains: list[TrainRow] = Field(default_factory=list)
     stays: list[StayRow] = Field(default_factory=list)
+    hosting: list[HostingRow] = Field(default_factory=list)
+    daytrips: list[DaytripRow] = Field(default_factory=list)
     raw_markdown: str = ""
 
 
@@ -223,6 +278,54 @@ def _row_to_stay(d: dict[str, str]) -> StayRow:
     )
 
 
+def _parse_bool(s: str | None) -> bool:
+    if s is None:
+        return False
+    return s.strip().lower() in {"yes", "true", "y", "1", "x", "✓"}
+
+
+def _opt_float(v: str | None) -> float | None:
+    if v is None or not v.strip():
+        return None
+    return float(v)
+
+
+def _row_to_hosting(d: dict[str, str]) -> HostingRow:
+    return HostingRow(
+        id=d.get("id", "").strip(),
+        trip_id=d.get("trip_id", "").strip(),
+        visitor_party=d.get("visitor_party", "").strip(),
+        visitor_count=int(d["visitor_count"]) if d.get("visitor_count", "").strip() else 1,
+        dates_start=_parse_date(d["dates_start"]),
+        dates_end=_parse_date(d["dates_end"]),
+        currency=d.get("currency", "GBP") or "GBP",
+        host_baseline_food_per_week=float(d.get("host_baseline_food_per_week") or 0),
+        host_baseline_dineout_per_outing=float(d.get("host_baseline_dineout_per_outing") or 0),
+        host_baseline_transport_per_day=float(d.get("host_baseline_transport_per_day") or 0),
+        planned_outings_count=(
+            int(d["planned_outings_count"]) if d.get("planned_outings_count", "").strip() else 0
+        ),
+        buffer_per_person=float(d.get("buffer_per_person") or 0),
+        max_total=_opt_float(d.get("max_total")),
+        notes=d.get("notes", "") or "",
+    )
+
+
+def _row_to_daytrip(d: dict[str, str]) -> DaytripRow:
+    return DaytripRow(
+        id=d.get("id", "").strip(),
+        trip_id=d.get("trip_id", "").strip(),
+        destination=d.get("destination", "").strip(),
+        mode=d.get("mode", "train") or "train",
+        date=_parse_date(d["date"]),
+        pax=int(d["pax"]) if d.get("pax", "").strip() else 1,
+        est_cost_per_pp=float(d.get("est_cost_per_pp") or 0),
+        currency=d.get("currency", "GBP") or "GBP",
+        includes_overnight=_parse_bool(d.get("includes_overnight")),
+        notes=d.get("notes", "") or "",
+    )
+
+
 def _section_body(full_md: str, heading: str) -> str:
     """Return text from `## heading` until next `## ` or EOF."""
     pattern = re.compile(
@@ -250,13 +353,19 @@ def load_kelly_config(path: str | Path) -> KellyConfig:
     content = post.content or ""
     trains_tbl = parse_markdown_table(_section_body(content, "Trains"))
     stays_tbl = parse_markdown_table(_section_body(content, "Stays"))
+    hosting_tbl = parse_markdown_table(_section_body(content, "Hosting"))
+    daytrips_tbl = parse_markdown_table(_section_body(content, "Daytrips"))
 
     trains = [_row_to_train(r) for r in trains_tbl if r.get("id")]
     stays = [_row_to_stay(r) for r in stays_tbl if r.get("id")]
+    hosting = [_row_to_hosting(r) for r in hosting_tbl if r.get("id")]
+    daytrips = [_row_to_daytrip(r) for r in daytrips_tbl if r.get("id")]
 
     return KellyConfig(
         frontmatter=frontmatter_model,
         trains=trains,
         stays=stays,
+        hosting=hosting,
+        daytrips=daytrips,
         raw_markdown=raw,
     )
