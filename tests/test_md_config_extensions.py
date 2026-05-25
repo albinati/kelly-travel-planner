@@ -77,3 +77,66 @@ currency: USD
     cfg = load_kelly_config(p)
     assert cfg.trains == []
     assert cfg.stays == []
+    assert cfg.hosting == []
+    assert cfg.daytrips == []
+
+
+HOSTING_SAMPLE = """---
+currency: GBP
+---
+
+## Hosting
+
+| id | trip_id | visitor_party | visitor_count | dates_start | dates_end | currency | host_baseline_food_per_week | host_baseline_dineout_per_outing | host_baseline_transport_per_day | planned_outings_count | buffer_per_person | max_total | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| parents-uk-hosting | parents-uk-2026-08 | parents | 2 | 2026-08-07 | 2026-08-30 | GBP | 95 | 60 | 3.50 | 3 | 80 | 2200 | 24 nights hosting |
+| sister-uk-hosting | parents-uk-2026-08 | sister-family | 4 | 2026-08-14 | 2026-08-30 | gbp | 95 | 60 | 3.50 | 2 | 80 | 2800 | overlap window |
+
+## Daytrips
+
+| id | trip_id | destination | mode | date | pax | est_cost_per_pp | currency | includes_overnight | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| bath-weekend | parents-uk-2026-08 | Bath | TRAIN | 2026-08-22 | 6 | 180 | GBP | yes | Sat-Sun GWR + B&B |
+| tower-of-london | parents-uk-2026-08 | London — Tower of London | tube | 2026-08-10 | 4 | 35 | GBP | no | family of 4 |
+"""
+
+
+def test_parses_hosting_section(tmp_path: Path) -> None:
+    p = tmp_path / "kelly.md"
+    p.write_text(HOSTING_SAMPLE, encoding="utf-8")
+    cfg = load_kelly_config(p)
+
+    assert [h.id for h in cfg.hosting] == ["parents-uk-hosting", "sister-uk-hosting"]
+    parents = cfg.hosting[0]
+    assert parents.trip_id == "parents-uk-2026-08"
+    assert parents.visitor_party == "parents"
+    assert parents.visitor_count == 2
+    assert parents.host_baseline_food_per_week == 95.0
+    assert parents.host_baseline_dineout_per_outing == 60.0
+    assert parents.host_baseline_transport_per_day == 3.5
+    assert parents.planned_outings_count == 3
+    assert parents.buffer_per_person == 80.0
+    assert parents.max_total == 2200.0
+    assert parents.currency == "GBP"
+    # Sister row had lowercase "gbp" — verify validator uppercases.
+    assert cfg.hosting[1].currency == "GBP"
+    assert cfg.hosting[1].visitor_count == 4
+
+
+def test_parses_daytrips_section(tmp_path: Path) -> None:
+    p = tmp_path / "kelly.md"
+    p.write_text(HOSTING_SAMPLE, encoding="utf-8")
+    cfg = load_kelly_config(p)
+
+    assert [d.id for d in cfg.daytrips] == ["bath-weekend", "tower-of-london"]
+    bath = cfg.daytrips[0]
+    assert bath.destination == "Bath"
+    assert bath.mode == "train"  # uppercased in source, normalized to lowercase
+    assert bath.pax == 6
+    assert bath.est_cost_per_pp == 180.0
+    assert bath.includes_overnight is True
+    assert bath.currency == "GBP"
+
+    tower = cfg.daytrips[1]
+    assert tower.mode == "tube"
+    assert tower.includes_overnight is False
