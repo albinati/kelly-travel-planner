@@ -1,10 +1,10 @@
-"""Tests for kelly_booking_event_draft — pure data composition, no I/O."""
+"""Tests for kelly_booking_event_draft — composition + bookings-table lookup."""
 
 from __future__ import annotations
 
 import json
 
-from kelly.mcp_server import kelly_booking_event_draft
+from kelly.mcp_server import kelly_booking_event_draft, kelly_log_booking
 
 
 def test_airbnb_draft_carries_confirmation_and_full_window() -> None:
@@ -61,3 +61,37 @@ def test_disney_draft_accepts_date_override() -> None:
 def test_unknown_booking_returns_error() -> None:
     data = json.loads(kelly_booking_event_draft("space_x"))
     assert "unknown booking" in data["error"]
+
+
+def test_airbnb_draft_shows_not_yet_logged_when_no_booking() -> None:
+    """With an empty bookings table, the description marks the total as missing."""
+    data = json.loads(kelly_booking_event_draft("airbnb"))
+    assert "(not yet logged)" in data["description"]
+
+
+def test_airbnb_draft_pulls_total_from_bookings_table() -> None:
+    """After logging the Airbnb booking, the calendar draft surfaces the total."""
+    kelly_log_booking(
+        trip_id="sample-trip",
+        leg="airbnb",
+        provider="airbnb",
+        total_amount="1219.14",
+        currency="GBP",
+        confirmation_ref="REDACTED_CONF",
+    )
+    data = json.loads(kelly_booking_event_draft("airbnb"))
+    assert "£1,219.14" in data["description"]
+
+
+def test_eurostar_back_draft_pulls_total_from_bookings_table() -> None:
+    """Eurostar back total flows from the bookings table at draft-time."""
+    kelly_log_booking(
+        trip_id="sample-trip",
+        leg="eurostar_back",
+        provider="eurostar",
+        total_amount="480.50",
+        currency="GBP",
+        confirmation_ref="REDACTED_REF",
+    )
+    data = json.loads(kelly_booking_event_draft("eurostar_back"))
+    assert "£480.50" in data["description"]
