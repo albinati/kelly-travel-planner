@@ -30,6 +30,7 @@ from kelly.providers.splitwise import (
 )
 from kelly.services.booking_service import booking_total_for_leg, log_booking
 from kelly.services.fx_service import FxError, convert as fx_convert, fx_quote
+from kelly.services.hosting_service import estimate_hosting
 from kelly.services.summary_service import summarize_trip
 from kelly.services.stay_service import search_stay, stay_result_to_jsonable
 from kelly.services.train_service import search_train, train_result_to_jsonable
@@ -317,6 +318,44 @@ def kelly_convert(
             "as_of": quote.get("as_of"),
             "source": quote.get("source"),
         },
+        default=str,
+    )
+
+
+# --- Hosting estimator ------------------------------------------------------
+
+
+@mcp.tool()
+def kelly_estimate_hosting(
+    hosting_id: str,
+    currency: str | None = None,
+    host_household_size: int = 2,
+    config_path: str | None = None,
+) -> str:
+    """Estimate the marginal cost of hosting the visiting party `hosting_id`.
+
+    Reads `## Hosting` (and matching `## Daytrips`) from kelly.md, then
+    computes food_delta + dineout_delta + transit + daytrips + buffer per
+    the formulas documented in `hosting_service.estimate_hosting`.
+
+    `host_household_size` is your own household count (default 2) — used
+    for the proportional food/dineout split. `currency` defaults to the
+    hosting row's own currency; pass a different one to convert.
+
+    Returns JSON `{components, daytrips, totals, warnings, over_max?}` or
+    `{"error": ..., "available_ids": [...]}` when the id isn't found.
+    """
+    path = _cfg(config_path)
+    if not path.is_file():
+        return json.dumps({"error": f"config not found: {path}"})
+    cfg = load_kelly_config(path)
+    return json.dumps(
+        estimate_hosting(
+            hosting_id,
+            cfg=cfg,
+            host_household_size=host_household_size,
+            currency=currency,
+        ),
         default=str,
     )
 
