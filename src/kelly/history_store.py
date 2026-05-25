@@ -208,6 +208,19 @@ CREATE TABLE IF NOT EXISTS bookings (
 );
 CREATE INDEX IF NOT EXISTS idx_bookings_trip
     ON bookings(trip_id, leg, recorded_at);
+
+CREATE TABLE IF NOT EXISTS fx_rates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    as_of TEXT NOT NULL,
+    base_ccy TEXT NOT NULL,
+    quote_ccy TEXT NOT NULL,
+    rate REAL NOT NULL,
+    fetched_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'ecb',
+    UNIQUE(as_of, base_ccy, quote_ccy, source)
+);
+CREATE INDEX IF NOT EXISTS idx_fx_lookup
+    ON fx_rates(as_of, base_ccy, quote_ccy);
 """
 
 
@@ -411,6 +424,60 @@ class SqliteHistoryStore:
                 )
                 for r in cur
             ]
+
+    def record_fx_rate(
+        self,
+        *,
+        as_of: str,
+        base_ccy: str,
+        quote_ccy: str,
+        rate: float,
+        source: str = "ecb",
+    ) -> int:
+        """Persist one EUR-base FX row. Idempotent via UNIQUE(as_of, base, quote, source)."""
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO fx_rates
+                    (as_of, base_ccy, quote_ccy, rate, fetched_at, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (as_of, base_ccy.upper(), quote_ccy.upper(), float(rate), now, source),
+            )
+            conn.commit()
+            return int(cur.lastrowid or 0)
+
+    def fetch_fx_rate(
+        self,
+        *,
+        as_of: str,
+        base_ccy: str,
+        quote_ccy: str,
+        source: str = "ecb",
+    ) -> float | None:
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                SELECT rate FROM fx_rates
+                WHERE as_of = ? AND base_ccy = ? AND quote_ccy = ? AND source = ?
+                ORDER BY fetched_at DESC LIMIT 1
+                """,
+                (as_of, base_ccy.upper(), quote_ccy.upper(), source),
+            )
+            row = cur.fetchone()
+            return float(row[0]) if row else None
+
+    def latest_fx_as_of(self, *, source: str = "ecb") -> str | None:
+        """Most recent `as_of` we have any rate row for. Used to fall back when
+        today's rates haven't been fetched yet but yesterday's are usable."""
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                "SELECT MAX(as_of) FROM fx_rates WHERE source = ?",
+                (source,),
+            )
+            row = cur.fetchone()
+            return row[0] if row and row[0] else None
 
     def fetch_hotel_amounts(self, key: str, *, window_days: int = 90) -> list[float]:
         cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
