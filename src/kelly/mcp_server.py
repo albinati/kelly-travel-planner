@@ -29,6 +29,7 @@ from kelly.providers.splitwise import (
     get_group_balances,
 )
 from kelly.services.booking_service import booking_total_for_leg, log_booking
+from kelly.services.fx_service import FxError, convert as fx_convert, fx_quote
 from kelly.services.stay_service import search_stay, stay_result_to_jsonable
 from kelly.services.train_service import search_train, train_result_to_jsonable
 from kelly.services.trip_planner import plan_trip
@@ -275,6 +276,45 @@ def kelly_expense_balances() -> str:
             "members": balances["members"],
             "simplified_debts": balances["simplified_debts"],
             "your_perspective": me_view,
+        },
+        default=str,
+    )
+
+
+# --- FX conversion ----------------------------------------------------------
+
+
+@mcp.tool()
+def kelly_convert(
+    amount: str,
+    from_ccy: str,
+    to_ccy: str,
+    as_of: str | None = None,
+) -> str:
+    """Convert *amount* from one ISO 4217 currency to another via cached ECB rates.
+
+    ``amount`` is a string (pass ``"1219.14"``) to preserve Decimal precision.
+    ``as_of`` is an optional ISO date — defaults to today UTC. If today's
+    rates aren't cached locally, the ECB daily feed is fetched once and
+    persisted; subsequent calls reuse the cache.
+
+    Returns JSON ``{from_ccy, to_ccy, amount, converted, rate, as_of, source}``
+    or ``{"error": "..."}`` if no cache + network failure prevents conversion.
+    """
+    try:
+        converted = fx_convert(amount, from_ccy, to_ccy, as_of=as_of)
+    except FxError as e:
+        return json.dumps({"error": str(e)})
+    quote = fx_quote(from_ccy, to_ccy, as_of=as_of)
+    return json.dumps(
+        {
+            "amount": str(amount),
+            "from_ccy": from_ccy.upper(),
+            "to_ccy": to_ccy.upper(),
+            "converted": f"{converted:.4f}",
+            "rate": quote.get("rate"),
+            "as_of": quote.get("as_of"),
+            "source": quote.get("source"),
         },
         default=str,
     )
