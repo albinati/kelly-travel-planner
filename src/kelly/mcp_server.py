@@ -30,6 +30,7 @@ from kelly.providers.splitwise import (
 )
 from kelly.services.booking_service import booking_total_for_leg, log_booking
 from kelly.services.fx_service import FxError, convert as fx_convert, fx_quote
+from kelly.services.summary_service import summarize_trip
 from kelly.services.stay_service import search_stay, stay_result_to_jsonable
 from kelly.services.train_service import search_train, train_result_to_jsonable
 from kelly.services.trip_planner import plan_trip
@@ -318,6 +319,27 @@ def kelly_convert(
         },
         default=str,
     )
+
+
+# --- Trip cost summary ------------------------------------------------------
+
+
+@mcp.tool()
+def kelly_trip_summary(trip_id: str, currency: str = "GBP") -> str:
+    """Aggregate every logged booking for *trip_id* into *currency*.
+
+    Reads the bookings table (latest-per-leg) and converts each amount via
+    ``kelly_convert`` using ECB rates as_of the booking's ``paid_at`` date.
+
+    Returns JSON ``{trip_id, currency, fx_as_of, by_leg: [...], by_category:
+    {trains, stays, tickets, other}, totals: {trip_total}, warnings: [...]}``.
+    Per-leg conversion failures land in ``warnings``; the whole tool never
+    raises. ``by_leg`` rows always carry the original (untouched) amount in
+    its original currency alongside the target conversion.
+
+    Example: ``kelly_trip_summary("paris-disney-2026-08", currency="BRL")``
+    """
+    return json.dumps(summarize_trip(trip_id, currency=currency), default=str)
 
 
 # --- Bookings + calendar event drafts ---------------------------------------
