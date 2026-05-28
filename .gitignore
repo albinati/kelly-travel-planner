@@ -12,3 +12,7 @@ data/*.sqlite
 !.env.example
 dist/
 *.egg-info/
+
+# Real trip config is user-private; only the example template is tracked.
+config/kelly.md
+!config/kelly.example.md

@@ -7,7 +7,7 @@ from kelly.history_store import BookingRecord, SqliteHistoryStore
 
 def _make(leg: str, total: float, ref: str | None = None) -> BookingRecord:
     return BookingRecord(
-        trip_id="sample-trip",
+        trip_id="trip-x",
         leg=leg,
         provider="manual",
         confirmation_ref=ref,
@@ -22,14 +22,14 @@ def _make(leg: str, total: float, ref: str | None = None) -> BookingRecord:
 def test_booking_roundtrip(tmp_path) -> None:
     db = tmp_path / "t.sqlite"
     store = SqliteHistoryStore(db)
-    rec = _make("airbnb", 1219.14, "REDACTED_CONF")
+    rec = _make("airbnb", 1219.14, "ABC123XY")
     row_id = store.record_booking(rec)
     assert row_id > 0
-    fetched = store.fetch_bookings("sample-trip")
+    fetched = store.fetch_bookings("trip-x")
     assert len(fetched) == 1
     assert fetched[0].leg == "airbnb"
     assert fetched[0].total_amount == 1219.14
-    assert fetched[0].confirmation_ref == "REDACTED_CONF"
+    assert fetched[0].confirmation_ref == "ABC123XY"
     assert fetched[0].currency == "GBP"
 
 
@@ -38,19 +38,19 @@ def test_booking_latest_per_leg_wins(tmp_path) -> None:
     db = tmp_path / "t.sqlite"
     store = SqliteHistoryStore(db)
     store.record_booking(_make("airbnb", 999.00, "OLD-REF"))
-    store.record_booking(_make("airbnb", 1219.14, "REDACTED_CONF"))
-    fetched = store.fetch_bookings("sample-trip")
+    store.record_booking(_make("airbnb", 1219.14, "ABC123XY"))
+    fetched = store.fetch_bookings("trip-x")
     assert len(fetched) == 1
     assert fetched[0].total_amount == 1219.14
-    assert fetched[0].confirmation_ref == "REDACTED_CONF"
+    assert fetched[0].confirmation_ref == "ABC123XY"
 
 
 def test_booking_all_versions_preserves_history(tmp_path) -> None:
     db = tmp_path / "t.sqlite"
     store = SqliteHistoryStore(db)
     store.record_booking(_make("airbnb", 999.00, "OLD-REF"))
-    store.record_booking(_make("airbnb", 1219.14, "REDACTED_CONF"))
-    all_versions = store.fetch_bookings("sample-trip", all_versions=True)
+    store.record_booking(_make("airbnb", 1219.14, "ABC123XY"))
+    all_versions = store.fetch_bookings("trip-x", all_versions=True)
     assert len(all_versions) == 2
     amounts = [r.total_amount for r in all_versions]
     assert amounts == [999.00, 1219.14]
@@ -62,7 +62,7 @@ def test_booking_multiple_legs(tmp_path) -> None:
     store.record_booking(_make("airbnb", 1219.14))
     store.record_booking(_make("eurostar_out", 460.00))
     store.record_booking(_make("eurostar_back", 480.00))
-    fetched = store.fetch_bookings("sample-trip")
+    fetched = store.fetch_bookings("trip-x")
     by_leg = {r.leg: r.total_amount for r in fetched}
     assert by_leg == {"airbnb": 1219.14, "eurostar_out": 460.00, "eurostar_back": 480.00}
 
@@ -99,6 +99,6 @@ def test_other_trips_are_isolated(tmp_path) -> None:
         paid_at=None,
     )
     store.record_booking(other)
-    assert len(store.fetch_bookings("sample-trip")) == 1
+    assert len(store.fetch_bookings("trip-x")) == 1
     assert len(store.fetch_bookings("other-trip")) == 1
     assert store.fetch_bookings("other-trip")[0].total_amount == 500.00

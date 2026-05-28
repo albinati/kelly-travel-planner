@@ -158,18 +158,14 @@ def test_currency_conversion_into_brl() -> None:
         return amt * Decimal("7")
 
     with patch("kelly.services.hosting_service.fx_convert", side_effect=fake_convert):
-        result = estimate_hosting(
-            "visitors-1", cfg=cfg, host_household_size=3, currency="BRL"
-        )
+        result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3, currency="BRL")
 
     assert result["currency"] == "BRL"
     components = result["components"]
     # Untouched-in-GBP food was £217.14 → £1519.98 in BRL
     assert Decimal(components["food_delta"]).quantize(Decimal("0.01")) == Decimal("1520.00")
     # Whole estimate is 7x the GBP estimate
-    gbp_result = estimate_hosting(
-        "visitors-1", cfg=cfg, host_household_size=3, currency="GBP"
-    )
+    gbp_result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3, currency="GBP")
     gbp_total = Decimal(gbp_result["totals"]["estimate"])
     brl_total = Decimal(result["totals"]["estimate"])
     assert (brl_total / gbp_total).quantize(Decimal("0.01")) == Decimal("7.00")
@@ -186,9 +182,7 @@ def test_fx_failure_warning_keeps_estimate_running() -> None:
         raise FxError("offline")
 
     with patch("kelly.services.hosting_service.fx_convert", side_effect=boom):
-        result = estimate_hosting(
-            "visitors-1", cfg=cfg, host_household_size=3, currency="BRL"
-        )
+        result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3, currency="BRL")
 
     # 4 base components + max_total cap conversion → 5 warnings (no daytrips)
     assert len([w for w in result["warnings"] if "could not convert" in w]) == 5
