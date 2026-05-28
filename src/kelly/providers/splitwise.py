@@ -105,7 +105,7 @@ def list_groups(client: httpx.Client) -> list[SplitwiseGroup]:
 
 def find_group_by_name(client: httpx.Client, name: str) -> SplitwiseGroup | None:
     """Case-insensitive substring match. Useful when the user remembers the
-    group name fuzzy ("family-london" matches "Family-London2026")."""
+    group name fuzzy ("family" matches "Family Trips 2030")."""
     needle = name.strip().lower()
     for g in list_groups(client):
         if needle in (g.name or "").lower():

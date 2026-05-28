@@ -89,15 +89,15 @@ currency: GBP
 
 | id | trip_id | visitor_party | visitor_count | dates_start | dates_end | currency | host_baseline_food_per_week | host_baseline_dineout_per_outing | host_baseline_transport_per_day | planned_outings_count | buffer_per_person | max_total | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| parents-uk-hosting | parents-uk-2026-08 | parents | 2 | 2026-08-07 | 2026-08-30 | GBP | 95 | 60 | 3.50 | 3 | 80 | 2200 | 24 nights hosting |
-| sister-uk-hosting | parents-uk-2026-08 | sister-family | 4 | 2026-08-14 | 2026-08-30 | gbp | 95 | 60 | 3.50 | 2 | 80 | 2800 | overlap window |
+| visitors-1 | hosting-trip | parents | 2 | 2026-08-07 | 2026-08-30 | GBP | 95 | 60 | 3.50 | 3 | 80 | 2200 | 24 nights hosting |
+| visitors-2 | hosting-trip | sister-family | 4 | 2026-08-14 | 2026-08-30 | gbp | 95 | 60 | 3.50 | 2 | 80 | 2800 | overlap window |
 
 ## Daytrips
 
 | id | trip_id | destination | mode | date | pax | est_cost_per_pp | currency | includes_overnight | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| bath-weekend | parents-uk-2026-08 | Bath | TRAIN | 2026-08-22 | 6 | 180 | GBP | yes | Sat-Sun GWR + B&B |
-| tower-of-london | parents-uk-2026-08 | London — Tower of London | tube | 2026-08-10 | 4 | 35 | GBP | no | family of 4 |
+| bath-weekend | hosting-trip | Bath | TRAIN | 2026-08-22 | 6 | 180 | GBP | yes | Sat-Sun GWR + B&B |
+| tower-of-london | hosting-trip | London — Tower of London | tube | 2026-08-10 | 4 | 35 | GBP | no | family of 4 |
 """
 
 
@@ -106,9 +106,9 @@ def test_parses_hosting_section(tmp_path: Path) -> None:
     p.write_text(HOSTING_SAMPLE, encoding="utf-8")
     cfg = load_kelly_config(p)
 
-    assert [h.id for h in cfg.hosting] == ["parents-uk-hosting", "sister-uk-hosting"]
+    assert [h.id for h in cfg.hosting] == ["visitors-1", "visitors-2"]
     parents = cfg.hosting[0]
-    assert parents.trip_id == "parents-uk-2026-08"
+    assert parents.trip_id == "hosting-trip"
     assert parents.visitor_party == "parents"
     assert parents.visitor_count == 2
     assert parents.host_baseline_food_per_week == 95.0

@@ -22,7 +22,7 @@ def _cfg() -> KellyConfig:
 
 def _row(area: str = "Paris, France") -> StayRow:
     return StayRow(
-        id="paris-disney",
+        id="sample-trip",
         area=area,
         check_in=date(2026, 8, 18),
         check_out=date(2026, 8, 21),
@@ -99,15 +99,11 @@ def test_search_hotel_persists_cheapest(mock_search, tmp_path) -> None:
 def test_search_hotel_skips_persist_on_error(mock_search, tmp_path) -> None:
     from kelly.history_store import SqliteHistoryStore, hotel_key
 
-    mock_search.return_value = HotelSearchResult(
-        listings=[], error="LITEAPI_API_KEY not set"
-    )
+    mock_search.return_value = HotelSearchResult(listings=[], error="LITEAPI_API_KEY not set")
     store = SqliteHistoryStore(tmp_path / "h.sqlite")
     search_hotel(_cfg(), _row(), store=store, persist=True)
     assert (
-        store.fetch_hotel_amounts(
-            hotel_key("Paris, France", date(2026, 8, 18), date(2026, 8, 21))
-        )
+        store.fetch_hotel_amounts(hotel_key("Paris, France", date(2026, 8, 18), date(2026, 8, 21)))
         == []
     )
 

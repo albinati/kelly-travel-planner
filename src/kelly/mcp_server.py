@@ -6,6 +6,7 @@ Install with `poetry install --extras mcp`.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date
 from pathlib import Path
 
@@ -16,7 +17,6 @@ except ImportError as e:
         "The `mcp` package is required. Install with: poetry install --extras mcp"
     ) from e
 
-from kelly.booking_metadata import AIRBNB, DISNEY, EUROSTAR_LEGS, format_money
 from kelly.history_store import open_default_store
 from kelly.md_config import StayRow, TrainRow, load_kelly_config
 from kelly.providers.splitwise import (
@@ -37,13 +37,39 @@ from kelly.services.train_service import search_train, train_result_to_jsonable
 from kelly.services.trip_planner import plan_trip
 from kelly.settings import config_path as default_config_path
 
-# --- Expense + calendar MVP constants ---------------------------------------
-# Single Splitwise group for the family's 2026 trip arc (Luis + Patricia).
-# Hardcoded by design — when the next trip arc starts we'll either bump this
-# or finally do the ExpenseProvider abstraction (deferred per the plan).
-_DEFAULT_GROUP_ID = 97871346  # Family-London2026
-_DEFAULT_GROUP_NAME = "Family-London2026"
-_TRIP_PREFIX = "[paris-disney-2026-08] "
+# --- Splitwise group config -------------------------------------------------
+# Read from env so trip-specific identifiers stay out of the repo. Set
+# KELLY_SPLITWISE_GROUP_ID (required for expense tools), optionally
+# KELLY_SPLITWISE_GROUP_NAME and KELLY_TRIP_PREFIX in .env.
+
+_CURRENCY_SYMBOLS = {"GBP": "£", "EUR": "€", "USD": "$", "BRL": "R$", "CAD": "C$"}
+
+
+def _format_money(amount: float, currency: str) -> str:
+    symbol = _CURRENCY_SYMBOLS.get(currency.upper())
+    if symbol:
+        return f"{symbol}{amount:,.2f}"
+    return f"{amount:,.2f} {currency.upper()}"
+
+
+def _splitwise_group_id() -> int | None:
+    raw = os.getenv("KELLY_SPLITWISE_GROUP_ID")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _splitwise_group_name() -> str:
+    return os.getenv("KELLY_SPLITWISE_GROUP_NAME", "group")
+
+
+def _trip_prefix() -> str:
+    raw = os.getenv("KELLY_TRIP_PREFIX", "")
+    return f"{raw} " if raw and not raw.endswith(" ") else raw
+
 
 mcp = FastMCP(
     "Kelly",
@@ -178,16 +204,16 @@ def kelly_log_expense(
     currency: str = "GBP",
     paid_by_me: bool = True,
 ) -> str:
-    """Log a shared expense to the family Splitwise group (Family-London2026),
-    splitting equally between all members.
+    """Log a shared expense to the configured Splitwise group, splitting equally
+    between all members.
 
-    The trip prefix ``[paris-disney-2026-08]`` is prepended automatically — the
-    *description* should be the receipt-level detail ("Dinner at Bistrot Paul
-    Bert", "RER A tickets, family of 10"). Amount is a string to avoid float
-    precision issues; pass it like ``"25.00"``.
+    The trip prefix from ``KELLY_TRIP_PREFIX`` (if set) is prepended to the
+    *description*, which should be the receipt-level detail. Amount is a string
+    to avoid float precision issues; pass it like ``"25.00"``.
 
     Returns JSON with the created expense id, currency, total, and per-user
-    share. Returns ``{"error": "..."}`` if SPLITWISE_API_KEY is not configured.
+    share. Returns ``{"error": "..."}`` if SPLITWISE_API_KEY or
+    KELLY_SPLITWISE_GROUP_ID is not configured.
     """
     if not paid_by_me:
         return json.dumps(
@@ -200,18 +226,21 @@ def kelly_log_expense(
                 )
             }
         )
+    group_id = _splitwise_group_id()
+    if group_id is None:
+        return json.dumps({"error": "KELLY_SPLITWISE_GROUP_ID is not set"})
     try:
         with splitwise_client() as client:
             me = get_current_user(client)
-            group = get_group(client, _DEFAULT_GROUP_ID)
+            group = get_group(client, group_id)
             member_ids = [int(m["id"]) for m in (group.get("members") or [])]
             if not member_ids:
-                return json.dumps({"error": f"group {_DEFAULT_GROUP_ID} has no members"})
+                return json.dumps({"error": f"group {group_id} has no members"})
             shares = equal_couple_shares(amount, member_ids)
-            full_desc = f"{_TRIP_PREFIX}{description}"
+            full_desc = f"{_trip_prefix()}{description}"
             expense = create_expense(
                 client,
-                group_id=_DEFAULT_GROUP_ID,
+                group_id=group_id,
                 description=full_desc,
                 cost=amount,
                 currency_code=currency,
@@ -224,7 +253,7 @@ def kelly_log_expense(
     return json.dumps(
         {
             "expense_id": expense.id,
-            "group": _DEFAULT_GROUP_NAME,
+            "group": _splitwise_group_name(),
             "description": expense.description,
             "cost": str(expense.cost),
             "currency": expense.currency_code,
@@ -237,23 +266,27 @@ def kelly_log_expense(
 
 @mcp.tool()
 def kelly_expense_balances() -> str:
-    """Read current balances in the family Splitwise group (Family-London2026).
+    """Read current balances in the configured Splitwise group.
 
     Returns JSON with each member's per-currency balance and Splitwise's
     minimum-transfer settle-up plan (``simplified_debts``). Positive balances
     mean the member is owed money; negative means they owe.
 
-    Returns ``{"error": "..."}`` if SPLITWISE_API_KEY is not configured.
+    Returns ``{"error": "..."}`` if SPLITWISE_API_KEY or
+    KELLY_SPLITWISE_GROUP_ID is not configured.
     """
+    group_id = _splitwise_group_id()
+    if group_id is None:
+        return json.dumps({"error": "KELLY_SPLITWISE_GROUP_ID is not set"})
     try:
         with splitwise_client() as client:
             me = get_current_user(client)
-            balances = get_group_balances(client, _DEFAULT_GROUP_ID)
+            balances = get_group_balances(client, group_id)
     except SplitwiseError as e:
         return json.dumps({"error": str(e)})
 
     # Relativize the simplified_debts for the calling user's perspective so the
-    # agent can phrase it naturally ("Patricia owes you £X" vs "You owe £X").
+    # agent can phrase it naturally ("X owes you £Y" vs "You owe X").
     members_by_id = {m["id"]: m for m in balances["members"]}
     me_view: list[dict[str, str]] = []
     for d in balances["simplified_debts"]:
@@ -272,7 +305,7 @@ def kelly_expense_balances() -> str:
 
     return json.dumps(
         {
-            "group": _DEFAULT_GROUP_NAME,
+            "group": _splitwise_group_name(),
             "group_id": balances["group_id"],
             "me": me.display_name,
             "members": balances["members"],
@@ -376,15 +409,15 @@ def kelly_trip_summary(trip_id: str, currency: str = "GBP") -> str:
     raises. ``by_leg`` rows always carry the original (untouched) amount in
     its original currency alongside the target conversion.
 
-    Example: ``kelly_trip_summary("paris-disney-2026-08", currency="BRL")``
+    Example: ``kelly_trip_summary("my-trip-id", currency="BRL")``
     """
     return json.dumps(summarize_trip(trip_id, currency=currency), default=str)
 
 
 # --- Bookings + calendar event drafts ---------------------------------------
-# Static operational metadata (locations, timezones, default times) lives in
-# `kelly.booking_metadata`. The *money* lives in the SQLite `bookings` table
-# and is fetched at draft-time so confirmations stay in sync after correction.
+# The *money* lives in the SQLite `bookings` table and is fetched at
+# draft-time so confirmations stay in sync after correction. Operational
+# metadata (location, timezones, times) is supplied by the caller.
 
 
 def _total_paid_str(trip_id: str, leg: str) -> str:
@@ -392,7 +425,7 @@ def _total_paid_str(trip_id: str, leg: str) -> str:
     if pair is None:
         return "(not yet logged)"
     amount, currency = pair
-    return format_money(amount, currency)
+    return _format_money(amount, currency)
 
 
 @mcp.tool()
@@ -447,116 +480,47 @@ def kelly_log_booking(
 
 @mcp.tool()
 def kelly_booking_event_draft(
-    booking: str,
-    depart_time: str | None = None,
-    arrive_time: str | None = None,
-    disney_date: str | None = None,
+    trip_id: str,
+    leg: str,
+    summary: str,
+    location: str,
+    start_datetime: str,
+    end_datetime: str,
+    start_timezone: str,
+    end_timezone: str | None = None,
+    description: str = "",
 ) -> str:
-    """Return a Google Calendar event spec for a Paris-Disney 2026-08 booking.
+    """Return a Google Calendar event spec, enriched with the booking total.
 
     The agent passes this spec to a Google Calendar MCP tool (e.g.
     ``mcp__claude_ai_Google_Calendar__create_event``) to actually create the
     event — Kelly never touches Google's API directly.
 
-    booking:
-      - ``"airbnb"`` — Airbnb stay, full check-in→checkout span.
-      - ``"eurostar_out"`` — outbound Eurostar leg. Pass *depart_time* and
-        *arrive_time* (HH:MM) to override the planner's recommendation (12:01→15:30).
-      - ``"eurostar_back"`` — return Eurostar leg. Same overrides (default 20:02→21:30).
-      - ``"disney"`` — Disney day visit. Pass *disney_date* (YYYY-MM-DD) to override
-        the default 2026-08-20.
-
-    The ``Total paid:`` line in the description is read from the bookings table
-    at runtime; if no booking has been logged yet, it shows "(not yet logged)".
+    Parameters carry all the operational metadata: ``summary`` (event title),
+    ``location`` (free-form address), ``start_datetime`` / ``end_datetime``
+    (ISO ``YYYY-MM-DDTHH:MM`` — seconds are appended), IANA timezones, and an
+    optional ``description``. ``trip_id`` + ``leg`` are used to look up the
+    booking's total in the bookings table; the ``Total paid:`` line is appended
+    to the description automatically. If no booking has been logged yet, it
+    shows ``"(not yet logged)"``.
 
     Returns JSON: ``{summary, location, description, start: {dateTime, timeZone},
                      end: {dateTime, timeZone}}``.
     """
-    b = booking.strip().lower()
-    if b == "airbnb":
-        a = AIRBNB
-        total = _total_paid_str(a["trip_id"], a["leg"])
-        desc = (
-            f"Host: {a['host']}\n"
-            f"Confirmation code: {a['confirmation_code']}\n"
-            f"Guests: {a['guests']}\n"
-            f"Total paid: {total}\n"
-            f"Reservation: {a['url']}\n\n"
-            f"Check-in after {a['check_in_time']}; checkout by {a['check_out_time']}."
-        )
-        return json.dumps(
-            {
-                "summary": a["summary"],
-                "location": a["location"],
-                "description": desc,
-                "start": {
-                    "dateTime": f"{a['check_in_date']}T{a['check_in_time']}:00",
-                    "timeZone": "Europe/Paris",
-                },
-                "end": {
-                    "dateTime": f"{a['check_out_date']}T{a['check_out_time']}:00",
-                    "timeZone": "Europe/Paris",
-                },
-            },
-            default=str,
-        )
-
-    if b in ("eurostar_out", "eurostar_back"):
-        leg = EUROSTAR_LEGS["out" if b == "eurostar_out" else "back"]
-        dep = depart_time or leg["default_depart"]
-        arr = arrive_time or leg["default_arrive"]
-        total = _total_paid_str(leg["trip_id"], leg["leg"])
-        return json.dumps(
-            {
-                "summary": leg["summary_fmt"].format(depart=dep, arrive=arr),
-                "location": leg["origin"],
-                "description": (
-                    f"Eurostar standard class.\n"
-                    f"Depart {leg['origin']} at {dep} ({leg['origin_tz']}).\n"
-                    f"Arrive {leg['destination']} at {arr} ({leg['destination_tz']}).\n"
-                    f"Total paid: {total}\n"
-                    f"Party of 10 — split into 2 booking groups (5+4+1 lap infant)."
-                ),
-                "start": {
-                    "dateTime": f"{leg['date']}T{dep}:00",
-                    "timeZone": leg["origin_tz"],
-                },
-                "end": {
-                    "dateTime": f"{leg['date']}T{arr}:00",
-                    "timeZone": leg["destination_tz"],
-                },
-            },
-            default=str,
-        )
-
-    if b == "disney":
-        d = DISNEY
-        the_date = disney_date or d["default_date"]
-        total = _total_paid_str(d["trip_id"], d["leg"])
-        return json.dumps(
-            {
-                "summary": d["summary"],
-                "location": d["location"],
-                "description": f"{d['notes']}\n\nTotal paid: {total}",
-                "start": {
-                    "dateTime": f"{the_date}T{d['default_start_time']}:00",
-                    "timeZone": d["tz"],
-                },
-                "end": {
-                    "dateTime": f"{the_date}T{d['default_end_time']}:00",
-                    "timeZone": d["tz"],
-                },
-            },
-            default=str,
-        )
-
+    total = _total_paid_str(trip_id, leg)
+    full_desc = (
+        description.rstrip() + ("\n\n" if description.strip() else "") + f"Total paid: {total}"
+    ).strip()
+    end_tz = end_timezone or start_timezone
     return json.dumps(
         {
-            "error": (
-                f"unknown booking {booking!r}. Use: 'airbnb', 'eurostar_out', "
-                "'eurostar_back', or 'disney'."
-            )
-        }
+            "summary": summary,
+            "location": location,
+            "description": full_desc,
+            "start": {"dateTime": f"{start_datetime}:00", "timeZone": start_timezone},
+            "end": {"dateTime": f"{end_datetime}:00", "timeZone": end_tz},
+        },
+        default=str,
     )
 
 

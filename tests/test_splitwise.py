@@ -48,12 +48,19 @@ def _mock_client_responding(payload: dict) -> MagicMock:
 
 def test_get_current_user_parses_response() -> None:
     client = _mock_client_responding(
-        {"user": {"id": 42, "first_name": "Luis", "last_name": "Test", "email": "luis@example.com"}}
+        {
+            "user": {
+                "id": 42,
+                "first_name": "Alice",
+                "last_name": "Test",
+                "email": "alice@example.com",
+            }
+        }
     )
     me = get_current_user(client)
     assert me.id == 42
-    assert me.display_name == "Luis Test"
-    assert me.email == "luis@example.com"
+    assert me.display_name == "Alice Test"
+    assert me.email == "alice@example.com"
 
 
 def test_list_groups_includes_members() -> None:
@@ -62,10 +69,10 @@ def test_list_groups_includes_members() -> None:
             "groups": [
                 {
                     "id": 100,
-                    "name": "Family-London2026",
+                    "name": "Test Group",
                     "members": [
-                        {"id": 1, "first_name": "Luis", "email": "luis@x.com"},
-                        {"id": 2, "first_name": "Patricia", "email": "paty@x.com"},
+                        {"id": 1, "first_name": "Alice", "email": "alice@x.com"},
+                        {"id": 2, "first_name": "Bob", "email": "bob@x.com"},
                     ],
                 }
             ]
@@ -75,7 +82,7 @@ def test_list_groups_includes_members() -> None:
     assert len(groups) == 1
     g = groups[0]
     assert g.id == 100
-    assert g.name == "Family-London2026"
+    assert g.name == "Test Group"
     assert [m.id for m in g.members] == [1, 2]
 
 
@@ -83,12 +90,12 @@ def test_find_group_by_name_substring_case_insensitive() -> None:
     client = _mock_client_responding(
         {
             "groups": [
-                {"id": 1, "name": "Family-London2026", "members": []},
+                {"id": 1, "name": "Test Group", "members": []},
                 {"id": 2, "name": "Lisbon-Holiday", "members": []},
             ]
         }
     )
-    assert find_group_by_name(client, "family-london").id == 1
+    assert find_group_by_name(client, "test").id == 1
     assert find_group_by_name(client, "LISBON").id == 2
     assert find_group_by_name(client, "berlin") is None
 
