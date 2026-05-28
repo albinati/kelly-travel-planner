@@ -27,8 +27,8 @@ def _cfg(
 def _parents_hosting() -> HostingRow:
     """Matches the actual scenario from the user's WhatsApp thread."""
     return HostingRow(
-        id="parents-uk-hosting",
-        trip_id="parents-uk-2026-08",
+        id="visitors-1",
+        trip_id="hosting-trip",
         visitor_party="parents",
         visitor_count=2,
         dates_start=date(2026, 8, 7),
@@ -48,13 +48,13 @@ def test_unknown_hosting_id_returns_error_with_available_ids() -> None:
     cfg = _cfg(hosting=[_parents_hosting()])
     result = estimate_hosting("does-not-exist", cfg=cfg)
     assert "error" in result
-    assert result["available_ids"] == ["parents-uk-hosting"]
+    assert result["available_ids"] == ["visitors-1"]
 
 
 def test_estimate_includes_all_components(tmp_path) -> None:
     """No FX needed (same currency); check the formula outputs cleanly."""
     cfg = _cfg(hosting=[_parents_hosting()])
-    result = estimate_hosting("parents-uk-hosting", cfg=cfg, host_household_size=3)
+    result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3)
     components = result["components"]
     # weeks = 24/7 = 3.428... ; visitor_share = 2/3
     # food_delta = 95 * (2/3) * (24/7) ≈ 217.14
@@ -75,7 +75,7 @@ def test_estimate_includes_daytrips() -> None:
         daytrips=[
             DaytripRow(
                 id="bath",
-                trip_id="parents-uk-2026-08",
+                trip_id="hosting-trip",
                 destination="Bath",
                 mode="train",
                 date=date(2026, 8, 22),
@@ -86,7 +86,7 @@ def test_estimate_includes_daytrips() -> None:
             ),
             DaytripRow(
                 id="tower",
-                trip_id="parents-uk-2026-08",
+                trip_id="hosting-trip",
                 destination="Tower of London",
                 mode="tube",
                 date=date(2026, 8, 10),
@@ -96,7 +96,7 @@ def test_estimate_includes_daytrips() -> None:
             ),
         ],
     )
-    result = estimate_hosting("parents-uk-hosting", cfg=cfg, host_household_size=3)
+    result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3)
     components = result["components"]
     # Daytrips: 180*2 + 35*2 = 360 + 70 = 430
     assert Decimal(components["daytrips"]) == Decimal("430.00")
@@ -122,14 +122,14 @@ def test_unrelated_daytrips_are_ignored() -> None:
             ),
         ],
     )
-    result = estimate_hosting("parents-uk-hosting", cfg=cfg, host_household_size=3)
+    result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3)
     assert result["daytrips"] == []
     assert result["components"]["daytrips"] == "0.00"
 
 
 def test_per_person_total() -> None:
     cfg = _cfg(hosting=[_parents_hosting()])
-    result = estimate_hosting("parents-uk-hosting", cfg=cfg, host_household_size=3)
+    result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3)
     estimate = Decimal(result["totals"]["estimate"])
     per_person = Decimal(result["totals"]["per_person"])
     # 2 visitors
@@ -140,7 +140,7 @@ def test_over_max_warning_when_estimate_exceeds_cap() -> None:
     row = _parents_hosting()
     row = row.model_copy(update={"max_total": 100.0})  # impossibly low cap
     cfg = _cfg(hosting=[row])
-    result = estimate_hosting("parents-uk-hosting", cfg=cfg, host_household_size=3)
+    result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3)
     assert result["over_max"] is not None
     assert any("exceeds max_total" in w for w in result["warnings"])
 
@@ -158,18 +158,14 @@ def test_currency_conversion_into_brl() -> None:
         return amt * Decimal("7")
 
     with patch("kelly.services.hosting_service.fx_convert", side_effect=fake_convert):
-        result = estimate_hosting(
-            "parents-uk-hosting", cfg=cfg, host_household_size=3, currency="BRL"
-        )
+        result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3, currency="BRL")
 
     assert result["currency"] == "BRL"
     components = result["components"]
     # Untouched-in-GBP food was £217.14 → £1519.98 in BRL
     assert Decimal(components["food_delta"]).quantize(Decimal("0.01")) == Decimal("1520.00")
     # Whole estimate is 7x the GBP estimate
-    gbp_result = estimate_hosting(
-        "parents-uk-hosting", cfg=cfg, host_household_size=3, currency="GBP"
-    )
+    gbp_result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3, currency="GBP")
     gbp_total = Decimal(gbp_result["totals"]["estimate"])
     brl_total = Decimal(result["totals"]["estimate"])
     assert (brl_total / gbp_total).quantize(Decimal("0.01")) == Decimal("7.00")
@@ -186,9 +182,7 @@ def test_fx_failure_warning_keeps_estimate_running() -> None:
         raise FxError("offline")
 
     with patch("kelly.services.hosting_service.fx_convert", side_effect=boom):
-        result = estimate_hosting(
-            "parents-uk-hosting", cfg=cfg, host_household_size=3, currency="BRL"
-        )
+        result = estimate_hosting("visitors-1", cfg=cfg, host_household_size=3, currency="BRL")
 
     # 4 base components + max_total cap conversion → 5 warnings (no daytrips)
     assert len([w for w in result["warnings"] if "could not convert" in w]) == 5

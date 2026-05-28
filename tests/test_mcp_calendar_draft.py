@@ -1,4 +1,4 @@
-"""Tests for kelly_booking_event_draft — composition + bookings-table lookup."""
+"""Tests for kelly_booking_event_draft — generic spec + bookings-table lookup."""
 
 from __future__ import annotations
 
@@ -7,91 +7,66 @@ import json
 from kelly.mcp_server import kelly_booking_event_draft, kelly_log_booking
 
 
-def test_airbnb_draft_carries_confirmation_and_full_window() -> None:
-    data = json.loads(kelly_booking_event_draft("airbnb"))
-    assert "HMESRSXD98" in data["summary"]
-    assert data["location"] == "218 Rue St Denis, 75002 Paris, France"
-    assert "HMESRSXD98" in data["description"]
-    # Check-in after 16:00 on 2026-08-18, checkout by 11:00 on 2026-08-21.
-    assert data["start"]["dateTime"] == "2026-08-18T16:00:00"
-    assert data["end"]["dateTime"] == "2026-08-21T11:00:00"
-    assert data["start"]["timeZone"] == "Europe/Paris"
-
-
-def test_eurostar_out_default_times_with_correct_timezones() -> None:
-    data = json.loads(kelly_booking_event_draft("eurostar_out"))
-    # Default 12:01→15:30 on 18 Aug.
-    assert data["start"] == {"dateTime": "2026-08-18T12:01:00", "timeZone": "Europe/London"}
-    assert data["end"] == {"dateTime": "2026-08-18T15:30:00", "timeZone": "Europe/Paris"}
-    assert "LON" in data["summary"] and "PAR" in data["summary"]
-
-
-def test_eurostar_back_default_matches_booking() -> None:
-    # Default reflects the actual booked train (ref TGDJKR): 20:02→21:30 on 21 Aug.
-    data = json.loads(kelly_booking_event_draft("eurostar_back"))
-    assert data["start"] == {"dateTime": "2026-08-21T20:02:00", "timeZone": "Europe/Paris"}
-    assert data["end"] == {"dateTime": "2026-08-21T21:30:00", "timeZone": "Europe/London"}
-    assert "20:02" in data["summary"] and "21:30" in data["summary"]
-
-
-def test_eurostar_back_accepts_depart_arrive_override() -> None:
-    data = json.loads(
-        kelly_booking_event_draft("eurostar_back", depart_time="20:02", arrive_time="21:30")
+def _draft(**overrides):
+    base = dict(
+        trip_id="trip-x",
+        leg="stay",
+        summary="Stay",
+        location="Somewhere",
+        start_datetime="2030-01-01T16:00",
+        end_datetime="2030-01-04T11:00",
+        start_timezone="Europe/Paris",
     )
-    # User wanted a later return → custom times reflected in summary + start/end.
-    assert "20:02" in data["summary"] and "21:30" in data["summary"]
-    assert data["start"] == {"dateTime": "2026-08-21T20:02:00", "timeZone": "Europe/Paris"}
-    assert data["end"] == {"dateTime": "2026-08-21T21:30:00", "timeZone": "Europe/London"}
+    base.update(overrides)
+    return json.loads(kelly_booking_event_draft(**base))
 
 
-def test_disney_draft_uses_mid_trip_default() -> None:
-    data = json.loads(kelly_booking_event_draft("disney"))
-    assert data["start"]["dateTime"].startswith("2026-08-20T09:00")
-    assert data["end"]["dateTime"].startswith("2026-08-20T22:00")
-    assert "Marne-la-Vall" in data["location"]
-    assert "RER A" in data["description"]
+def test_draft_returns_spec_with_appended_total_marker() -> None:
+    data = _draft()
+    assert data["summary"] == "Stay"
+    assert data["location"] == "Somewhere"
+    assert data["start"] == {"dateTime": "2030-01-01T16:00:00", "timeZone": "Europe/Paris"}
+    assert data["end"] == {"dateTime": "2030-01-04T11:00:00", "timeZone": "Europe/Paris"}
+    # With nothing logged in bookings, the description carries the placeholder.
+    assert data["description"] == "Total paid: (not yet logged)"
 
 
-def test_disney_draft_accepts_date_override() -> None:
-    data = json.loads(kelly_booking_event_draft("disney", disney_date="2026-08-19"))
-    assert data["start"]["dateTime"].startswith("2026-08-19T")
-    assert data["end"]["dateTime"].startswith("2026-08-19T")
+def test_draft_uses_end_timezone_when_supplied() -> None:
+    data = _draft(start_timezone="Europe/London", end_timezone="Europe/Paris")
+    assert data["start"]["timeZone"] == "Europe/London"
+    assert data["end"]["timeZone"] == "Europe/Paris"
 
 
-def test_unknown_booking_returns_error() -> None:
-    data = json.loads(kelly_booking_event_draft("space_x"))
-    assert "unknown booking" in data["error"]
+def test_draft_falls_back_to_start_timezone_when_end_missing() -> None:
+    data = _draft(start_timezone="Europe/London")
+    assert data["end"]["timeZone"] == "Europe/London"
 
 
-def test_airbnb_draft_shows_not_yet_logged_when_no_booking() -> None:
-    """With an empty bookings table, the description marks the total as missing."""
-    data = json.loads(kelly_booking_event_draft("airbnb"))
-    assert "(not yet logged)" in data["description"]
+def test_draft_appends_total_to_existing_description() -> None:
+    data = _draft(description="Some details here.")
+    assert data["description"].startswith("Some details here.")
+    assert data["description"].endswith("Total paid: (not yet logged)")
 
 
-def test_airbnb_draft_pulls_total_from_bookings_table() -> None:
-    """After logging the Airbnb booking, the calendar draft surfaces the total."""
+def test_draft_pulls_total_from_bookings_table() -> None:
     kelly_log_booking(
-        trip_id="paris-disney-2026-08",
-        leg="airbnb",
+        trip_id="trip-y",
+        leg="stay",
         provider="airbnb",
-        total_amount="1219.14",
+        total_amount="1234.56",
         currency="GBP",
-        confirmation_ref="HMESRSXD98",
     )
-    data = json.loads(kelly_booking_event_draft("airbnb"))
-    assert "£1,219.14" in data["description"]
+    data = _draft(trip_id="trip-y", leg="stay")
+    assert "£1,234.56" in data["description"]
 
 
-def test_eurostar_back_draft_pulls_total_from_bookings_table() -> None:
-    """Eurostar back total flows from the bookings table at draft-time."""
+def test_draft_formats_currency_with_iso_fallback_for_unknown_symbol() -> None:
     kelly_log_booking(
-        trip_id="paris-disney-2026-08",
-        leg="eurostar_back",
-        provider="eurostar",
-        total_amount="480.50",
-        currency="GBP",
-        confirmation_ref="TGDJKR",
+        trip_id="trip-z",
+        leg="stay",
+        provider="hotel",
+        total_amount="999.00",
+        currency="CHF",
     )
-    data = json.loads(kelly_booking_event_draft("eurostar_back"))
-    assert "£480.50" in data["description"]
+    data = _draft(trip_id="trip-z", leg="stay")
+    assert "999.00 CHF" in data["description"]
