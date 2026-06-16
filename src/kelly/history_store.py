@@ -38,6 +38,18 @@ def hotel_key(area: str, check_in: date, check_out: date) -> str:
     return f"{area.strip().lower()}|{check_in.isoformat()}|{check_out.isoformat()}"
 
 
+def award_flight_key(
+    origin: str,
+    destination: str,
+    fly_date: date,
+    cabin: str,
+) -> str:
+    return (
+        f"{origin.strip().upper()}|{destination.strip().upper()}"
+        f"|{fly_date.isoformat()}|{cabin.strip().lower()}"
+    )
+
+
 @dataclass
 class TrainObservation:
     """One per train search call — captures the cheapest per-adult fare seen
@@ -123,6 +135,26 @@ class HotelObservation:
     pax_child: int
     pax_infant: int
     raw_json: str | None = None
+
+
+@dataclass
+class AwardFlightObservation:
+    """One per BA-bookable award option seen via seats.aero — captures the
+    operating airlines, remaining seats, the partner program + its mileage cost
+    (provenance only — NOT the Avios price), and the Avios cost computed from
+    the BA Reward Flight Saver chart for the route distance + travel date."""
+
+    origin: str
+    destination: str
+    fly_date: str
+    cabin: str
+    operating_airlines: str
+    seats: int
+    partner_source: str  # seats.aero Route.Source (e.g. "american")
+    partner_mileage_cost: int | None  # PARTNER miles — NOT Avios
+    avios_cost: int | None  # BA RFS chart Avios, per person one-way
+    availability_id: str | None
+    distance_mi: int | None
 
 
 _SCHEMA = """
@@ -221,6 +253,25 @@ CREATE TABLE IF NOT EXISTS fx_rates (
 );
 CREATE INDEX IF NOT EXISTS idx_fx_lookup
     ON fx_rates(as_of, base_ccy, quote_ccy);
+
+CREATE TABLE IF NOT EXISTS award_flight_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    observed_at TEXT NOT NULL,
+    trip_key TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    fly_date TEXT NOT NULL,
+    cabin TEXT NOT NULL,
+    operating_airlines TEXT,
+    seats INTEGER NOT NULL,
+    partner_source TEXT,
+    partner_mileage_cost INTEGER,
+    avios_cost INTEGER,
+    availability_id TEXT,
+    distance_mi INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_award_trip_time
+    ON award_flight_observations(trip_key, observed_at);
 """
 
 
@@ -320,6 +371,40 @@ class SqliteHistoryStore:
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.execute(
                 f"INSERT INTO hotel_observations ({','.join(cols)}) VALUES ({placeholders})",
+                values,
+            )
+            conn.commit()
+            return int(cur.lastrowid or 0)
+
+    def append_award_flight(self, obs: AwardFlightObservation) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        trip_key = award_flight_key(
+            obs.origin,
+            obs.destination,
+            date.fromisoformat(obs.fly_date),
+            obs.cabin,
+        )
+        cols = [
+            "observed_at",
+            "trip_key",
+            "origin",
+            "destination",
+            "fly_date",
+            "cabin",
+            "operating_airlines",
+            "seats",
+            "partner_source",
+            "partner_mileage_cost",
+            "avios_cost",
+            "availability_id",
+            "distance_mi",
+        ]
+        row = {**asdict(obs), "observed_at": now, "trip_key": trip_key}
+        values = [row[c] for c in cols]
+        placeholders = ",".join("?" * len(cols))
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                f"INSERT INTO award_flight_observations ({','.join(cols)}) VALUES ({placeholders})",
                 values,
             )
             conn.commit()
