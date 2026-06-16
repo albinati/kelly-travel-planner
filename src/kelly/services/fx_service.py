@@ -20,6 +20,9 @@ from kelly.history_store import SqliteHistoryStore, open_default_store
 
 ECB_DAILY_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
 ECB_SOURCE = "ecb"
+# Per-wall-day "we already fetched the feed" marker. Stored under its own
+# source so it never shows up in latest_fx_as_of / rate lookups for ECB_SOURCE.
+ECB_FETCH_MARKER = "ecb_fetch_marker"
 
 # ECB XML uses these namespaces; ElementTree needs them spelled out.
 _NS = {
@@ -97,6 +100,20 @@ def _ensure_fresh(store: SqliteHistoryStore, *, client: httpx.Client | None = No
         is not None
     ):
         return today
+    # We may have already fetched the feed today even though its as_of is an
+    # earlier business day — ECB only publishes on weekdays, so on weekends/
+    # holidays the feed's as_of < today. Without this guard the freshness check
+    # above never matches and we refetch on every convert() call. The marker is
+    # stored under its own source so it never pollutes latest_fx_as_of / lookups.
+    if (
+        store.fetch_fx_rate(
+            as_of=today, base_ccy="EUR", quote_ccy="EUR", source=ECB_FETCH_MARKER
+        )
+        is not None
+    ):
+        cached = store.latest_fx_as_of(source=ECB_SOURCE)
+        if cached:
+            return cached
     try:
         as_of, rates = fetch_ecb_rates(client=client)
     except (httpx.HTTPError, FxError):
@@ -105,6 +122,10 @@ def _ensure_fresh(store: SqliteHistoryStore, *, client: httpx.Client | None = No
             return fallback
         raise FxError("ECB feed unavailable and no cached rates — cannot convert") from None
     _persist_rates(store, as_of, rates)
+    # Record that we fetched today's feed so same-day calls reuse the cache.
+    store.record_fx_rate(
+        as_of=today, base_ccy="EUR", quote_ccy="EUR", rate=1.0, source=ECB_FETCH_MARKER
+    )
     return as_of
 
 
@@ -164,7 +185,9 @@ def fx_quote(
         return {"error": str(e), "from_ccy": from_ccy.upper(), "to_ccy": to_ccy.upper()}
     s = store or open_default_store()
     resolved_as_of = (
-        as_of.isoformat() if isinstance(as_of, date) else (as_of or s.latest_fx_as_of() or "")
+        as_of.isoformat()
+        if isinstance(as_of, date)
+        else (as_of or s.latest_fx_as_of(source=ECB_SOURCE) or "")
     )
     return {
         "from_ccy": from_ccy.upper(),
