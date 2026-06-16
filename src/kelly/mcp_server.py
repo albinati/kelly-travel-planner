@@ -33,6 +33,7 @@ from kelly.services.award_flight_service import (
     search_avios,
 )
 from kelly.services.booking_service import booking_total_for_leg, log_booking
+from kelly.services.budget_service import compare_options
 from kelly.services.fx_service import FxError, convert as fx_convert, fx_quote
 from kelly.services.hosting_service import estimate_hosting
 from kelly.services.profile_service import (
@@ -534,6 +535,50 @@ def kelly_convert(
         },
         default=str,
     )
+
+
+# --- Budget comparison ------------------------------------------------------
+
+
+@mcp.tool()
+def kelly_budget_compare(options_json: str, target_currency: str = "GBP") -> str:
+    """Compare N candidate trip options by their **all-in** total and rank them.
+
+    ``options_json`` is a JSON string of a list of options. Each option::
+
+        {
+          "name": "Option A",
+          "lines": [
+            {"label": "Eurostar", "amount": "180", "currency": "GBP",
+             "kind": "transport"},
+            {"label": "Airbnb 3n", "amount": "0", "currency": "EUR",
+             "kind": "stay", "price_all_in": "640"}
+          ],
+          "avios": {"points": 30000, "taxes_amount": "120",
+                    "taxes_currency": "GBP"}
+        }
+
+    Line ``kind`` is one of ``transport|stay|experience|car|local|other``.
+    **All-in rule:** stay lines must already be all-in; when a stay line carries
+    ``price_all_in`` it is used and any raw ``price_total`` is ignored (mixing a
+    raw provider total with an all-in price is apples-vs-bananas).
+
+    **Avios rule:** ``avios.points`` are summed and reported per option but never
+    folded into the cash ``all_in_total`` — only the (converted) Avios cash
+    taxes are added to the total.
+
+    Returns JSON ``{target_currency, options[...], ranked, cheapest, deltas}``
+    (ranked ascending by all_in_total; deltas vs the cheapest). Per-line FX
+    failures count that line at 0 and surface a warning rather than raising.
+    Returns ``{"error": "..."}`` if ``options_json`` doesn't parse as a list.
+    """
+    try:
+        options = json.loads(options_json)
+    except (json.JSONDecodeError, TypeError) as e:
+        return json.dumps({"error": f"options_json is not valid JSON: {e}"})
+    if not isinstance(options, list):
+        return json.dumps({"error": "options_json must be a JSON array of options"})
+    return json.dumps(compare_options(options, target_currency=target_currency), default=str)
 
 
 # --- Hosting estimator ------------------------------------------------------
