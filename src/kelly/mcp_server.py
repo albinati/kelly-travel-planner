@@ -28,6 +28,10 @@ from kelly.providers.splitwise import (
     get_group,
     get_group_balances,
 )
+from kelly.services.award_flight_service import (
+    award_flight_result_to_jsonable,
+    search_avios,
+)
 from kelly.services.booking_service import booking_total_for_leg, log_booking
 from kelly.services.fx_service import FxError, convert as fx_convert, fx_quote
 from kelly.services.hosting_service import estimate_hosting
@@ -195,6 +199,50 @@ def kelly_plan_trip(trip_id: str, config_path: str | None = None, persist: bool 
     cfg = load_kelly_config(path)
     store = open_default_store() if persist else None
     return json.dumps(plan_trip(cfg, trip_id, store=store, persist=persist), default=str)
+
+
+@mcp.tool()
+def kelly_avios_search(
+    origin_airports: str,
+    destination_airports: str,
+    date_start: str,
+    date_end: str,
+    pax: int,
+    cabin: str = "economy",
+    only_direct: bool = True,
+    persist: bool = True,
+) -> str:
+    """Search BA-operated award-flight availability over a date window.
+
+    Uses seats.aero as an availability *radar* (it indexes oneworld partner
+    award space) and keeps only options that are BA-operated and bookable with
+    Avios. For each it returns remaining seats, real depart/arrive times (when
+    available), and the **Avios cost from BA's Reward Flight Saver chart** (banded
+    by great-circle distance + a peak calendar).
+
+    IMPORTANT: the ``partner_mileage_cost`` field is the partner program's miles
+    (e.g. AAdvantage), NOT the Avios price. The Avios number is ``avios_cost``,
+    sourced only from the BA chart; ``avios_taxes_note`` flags that it's approximate
+    and that taxes/fees are separate — confirm on BA.com before booking.
+
+    *origin_airports* / *destination_airports* are comma-separated IATA codes
+    (e.g. "LHR,LGW,LCY" → "CTA"). Requires ``SEATSAERO_API_KEY`` in .env; returns
+    ``{"error": "..."}`` JSON if it's missing.
+    """
+    origins = [c.strip() for c in origin_airports.split(",") if c.strip()]
+    dests = [c.strip() for c in destination_airports.split(",") if c.strip()]
+    store = open_default_store() if persist else None
+    res = search_avios(
+        origins,
+        dests,
+        (date.fromisoformat(date_start), date.fromisoformat(date_end)),
+        pax=pax,
+        cabin=cabin,
+        only_direct=only_direct,
+        store=store,
+        persist=persist,
+    )
+    return json.dumps(award_flight_result_to_jsonable(res), default=str)
 
 
 @mcp.tool()
