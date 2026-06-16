@@ -45,6 +45,12 @@ from kelly.services.profile_service import (
 from kelly.services.summary_service import summarize_trip
 from kelly.services.stay_service import search_stay, stay_result_to_jsonable
 from kelly.services.train_service import search_train, train_result_to_jsonable
+from kelly.services.transport_service import (
+    avios_options_from_service,
+    eurostar_options_from_result,
+    itinerary_to_jsonable,
+    solve_pairings,
+)
 from kelly.services.trip_planner import plan_trip
 from kelly.settings import config_path as default_config_path
 
@@ -250,6 +256,126 @@ def kelly_avios_search(
         persist=persist,
     )
     return json.dumps(award_flight_result_to_jsonable(res), default=str)
+
+
+@mcp.tool()
+def kelly_solve_itinerary(
+    origin_airports: str,
+    destination_airports: str,
+    date_start: str,
+    date_end: str,
+    pax: int,
+    out_days: str = "Thu,Fri",
+    return_days: str = "Sun",
+    min_nights: int = 2,
+    max_nights: int = 3,
+    open_jaw: bool = True,
+    min_seats: int = 2,
+    modes: str = "avios",
+    persist: bool = True,
+) -> str:
+    """Search transport for a weekend window and return ranked itineraries.
+
+    Pairs an outbound leg with a return leg under weekend-shape constraints —
+    *out_days* / *return_days* are comma-separated weekday short names
+    ("Thu,Fri" → "Sun"), nights kept within ``[min_nights, max_nights]``. Set
+    ``open_jaw=True`` (default) to allow the return to depart from a *different*
+    airport in ``destination_airports`` (this is how Bari-in / Brindisi-out is
+    found): the outbound destination and the return origin range over the whole
+    destination set independently.
+
+    ``modes`` is a comma-separated list of ``"avios"`` (BA award flights via
+    seats.aero + the BA RFS chart) and/or ``"eurostar"`` (cash trains). Avios
+    contributes flight legs priced in Avios; Eurostar contributes cash train
+    legs (best-effort — if the route isn't a Eurostar city pair it simply
+    contributes nothing). ``min_seats`` drops a pairing only when a leg's *known*
+    seat count is below the threshold (Eurostar seats are unknown ⇒ kept).
+
+    Ranking (best first): all-Avios itineraries first by cheapest total Avios,
+    then cash itineraries by cheapest total cash, ties broken by shortest combined
+    travel time. The returned list is capped at the top 25 (``"capped"`` flags it).
+
+    Returns JSON ``{itineraries: [...], count, capped, notes: [...]}`` or
+    ``{"error": "..."}`` (e.g. ``SEATSAERO_API_KEY`` missing for avios mode).
+    """
+    origins = [c.strip() for c in origin_airports.split(",") if c.strip()]
+    dests = [c.strip() for c in destination_airports.split(",") if c.strip()]
+    out_day_set = {d.strip() for d in out_days.split(",") if d.strip()}
+    return_day_set = {d.strip() for d in return_days.split(",") if d.strip()}
+    mode_set = {m.strip().lower() for m in modes.split(",") if m.strip()}
+    start = date.fromisoformat(date_start)
+    end = date.fromisoformat(date_end)
+    store = open_default_store() if persist else None
+
+    out_pool = []
+    return_pool = []
+    notes: list[str] = []
+
+    if "avios" in mode_set:
+        out_res = search_avios(origins, dests, (start, end), pax=pax, store=store, persist=persist)
+        back_res = search_avios(dests, origins, (start, end), pax=pax, store=store, persist=persist)
+        if out_res.error:
+            return json.dumps({"error": out_res.error})
+        if back_res.error:
+            return json.dumps({"error": back_res.error})
+        out_pool += avios_options_from_service(out_res)
+        return_pool += avios_options_from_service(back_res)
+        for tag, r in (("out", out_res), ("back", back_res)):
+            if r.note:
+                notes.append(f"avios {tag}: {r.note}")
+
+    if "eurostar" in mode_set:
+        from kelly.providers.playwright_eurostar import search_eurostar
+
+        # Best-effort: scan each origin→dest city pair across the window, one
+        # date at a time so depart_dt is dated correctly. Unknown stations / no
+        # results just contribute nothing (the provider returns a clean error).
+        def _scan(o_codes: list[str], d_codes: list[str], pool: list) -> None:
+            cur = start
+            while cur <= end:
+                for o in o_codes:
+                    for d in d_codes:
+                        res = search_eurostar(
+                            origin_city=o,
+                            destination_city=d,
+                            date_start=cur,
+                            date_end=cur,
+                            adults=pax,
+                        )
+                        if res.error:
+                            continue
+                        for opt in eurostar_options_from_result(res, cur):
+                            opt.origin = o
+                            opt.destination = d
+                            pool.append(opt)
+                cur = date.fromordinal(cur.toordinal() + 1)
+
+        _scan(origins, dests, out_pool)
+        _scan(dests, origins, return_pool)
+
+    itineraries = solve_pairings(
+        out_pool,
+        return_pool,
+        out_days=out_day_set,
+        return_days=return_day_set,
+        min_nights=min_nights,
+        max_nights=max_nights,
+        open_jaw=open_jaw,
+        min_seats=min_seats,
+    )
+
+    cap = 25
+    capped = len(itineraries) > cap
+    top = itineraries[:cap]
+    return json.dumps(
+        {
+            "itineraries": [itinerary_to_jsonable(it) for it in top],
+            "count": len(top),
+            "capped": capped,
+            "notes": notes,
+        },
+        default=str,
+    )
 
 
 @mcp.tool()
