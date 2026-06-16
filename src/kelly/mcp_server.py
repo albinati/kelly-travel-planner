@@ -35,6 +35,13 @@ from kelly.services.award_flight_service import (
 from kelly.services.booking_service import booking_total_for_leg, log_booking
 from kelly.services.fx_service import FxError, convert as fx_convert, fx_quote
 from kelly.services.hosting_service import estimate_hosting
+from kelly.services.profile_service import (
+    add_dream_trip as profile_add_dream_trip,
+    get_profile as profile_get_profile,
+    list_dream_trips as profile_list_dream_trips,
+    remove_dream_trip as profile_remove_dream_trip,
+    set_profile as profile_set_profile,
+)
 from kelly.services.summary_service import summarize_trip
 from kelly.services.stay_service import search_stay, stay_result_to_jsonable
 from kelly.services.train_service import search_train, train_result_to_jsonable
@@ -570,6 +577,68 @@ def kelly_booking_event_draft(
         },
         default=str,
     )
+
+
+@mcp.tool()
+def kelly_profile_set(profile_id: str, name: str, payload_json: str = "") -> str:
+    """Upsert the single-user traveller profile, keyed by ``profile_id``.
+
+    ``payload_json`` is a free-form JSON string (travellers, food/relax prefs,
+    hard exclusions, home origin airports, Avios notes) — stored verbatim. Saving
+    the same ``profile_id`` again overwrites in place (no duplicates). Pass an
+    empty string for ``payload_json`` to leave the blob unset. Returns the stored
+    profile, or ``{"error": "..."}`` if ``payload_json`` isn't valid JSON.
+    """
+    return json.dumps(profile_set_profile(profile_id, name, payload_json), default=str)
+
+
+@mcp.tool()
+def kelly_profile_get(profile_id: str) -> str:
+    """Return the stored traveller profile for ``profile_id``.
+
+    Returns ``{"error": "..."}`` if no profile has been saved under that id.
+    """
+    return json.dumps(profile_get_profile(profile_id), default=str)
+
+
+@mcp.tool()
+def kelly_dreambox_add(
+    title: str,
+    destination: str = "",
+    notes: str = "",
+    profile_id: str = "",
+    payload_json: str = "",
+) -> str:
+    """Park a future-trip idea in the dream-box; return the created row.
+
+    Only ``title`` is required. ``destination`` / ``notes`` are free text;
+    ``profile_id`` (optional) ties the idea to a profile; ``payload_json`` (a JSON
+    string) carries any extra structured notes (budget hints, candidate dates,
+    must-dos). Returns ``{"error": "..."}`` if ``payload_json`` isn't valid JSON.
+    """
+    return json.dumps(
+        profile_add_dream_trip(title, destination, notes, profile_id, payload_json),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_dreambox_list(profile_id: str = "") -> str:
+    """List all parked dream-box trips, newest first.
+
+    Pass ``profile_id`` to filter to one profile's parked ideas; omit it for all.
+    """
+    return json.dumps(profile_list_dream_trips(profile_id), default=str)
+
+
+@mcp.tool()
+def kelly_dreambox_remove(id: int) -> str:
+    """Delete a parked dream-box trip by its ``id``.
+
+    Returns ``{"deleted": id}`` on success, or ``{"error": "..."}`` if no row
+    with that id exists.
+    """
+    return json.dumps(profile_remove_dream_trip(id), default=str)
 
 
 @mcp.resource("kelly://config", mime_type="text/markdown")
