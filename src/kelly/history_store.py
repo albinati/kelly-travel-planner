@@ -138,6 +138,34 @@ class HotelObservation:
 
 
 @dataclass
+class Profile:
+    """The single-user traveller profile. ``payload_json`` is a free-form JSON
+    blob (travellers, food/relax prefs, hard exclusions, home origin airports,
+    Avios notes) — Kelly stores it verbatim and never interprets its shape here.
+    Upserted by ``profile_id`` so re-saving overwrites in place."""
+
+    profile_id: str
+    name: str | None
+    payload_json: str | None
+    updated_at: str | None = None
+
+
+@dataclass
+class DreamTrip:
+    """One parked future-trip idea ("dream box"). Append-only with a delete:
+    list it, then remove by ``id``. ``payload_json`` holds any extra structured
+    notes (budget hints, candidate dates, must-dos)."""
+
+    id: int | None
+    profile_id: str | None
+    title: str
+    destination: str | None
+    notes: str | None
+    payload_json: str | None
+    created_at: str | None = None
+
+
+@dataclass
 class AwardFlightObservation:
     """One per BA-bookable award option seen via seats.aero — captures the
     operating airlines, remaining seats, the partner program + its mileage cost
@@ -272,6 +300,25 @@ CREATE TABLE IF NOT EXISTS award_flight_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_award_trip_time
     ON award_flight_observations(trip_key, observed_at);
+
+CREATE TABLE IF NOT EXISTS profiles (
+    profile_id TEXT PRIMARY KEY,
+    name TEXT,
+    payload_json TEXT,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dream_box (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id TEXT,
+    title TEXT NOT NULL,
+    destination TEXT,
+    notes TEXT,
+    payload_json TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dream_box_profile
+    ON dream_box(profile_id, created_at);
 """
 
 
@@ -409,6 +456,102 @@ class SqliteHistoryStore:
             )
             conn.commit()
             return int(cur.lastrowid or 0)
+
+    # --- Profile (single-user, upsert by profile_id) -----------------------
+
+    def upsert_profile(self, profile: Profile) -> str:
+        """Insert or overwrite the profile keyed by ``profile_id``. Returns the
+        ``profile_id``. ``updated_at`` is stamped server-side on every write."""
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO profiles (profile_id, name, payload_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(profile_id) DO UPDATE SET
+                    name = excluded.name,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (profile.profile_id, profile.name, profile.payload_json, now),
+            )
+            conn.commit()
+        return profile.profile_id
+
+    def get_profile(self, profile_id: str) -> Profile | None:
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                SELECT profile_id, name, payload_json, updated_at
+                FROM profiles WHERE profile_id = ?
+                """,
+                (profile_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return Profile(
+                profile_id=row[0],
+                name=row[1],
+                payload_json=row[2],
+                updated_at=row[3],
+            )
+
+    # --- Dream box (append + list + delete) --------------------------------
+
+    def add_dream_trip(self, trip: DreamTrip) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO dream_box
+                    (profile_id, title, destination, notes, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trip.profile_id,
+                    trip.title,
+                    trip.destination,
+                    trip.notes,
+                    trip.payload_json,
+                    now,
+                ),
+            )
+            conn.commit()
+            return int(cur.lastrowid or 0)
+
+    def list_dream_trips(self, profile_id: str | None = None) -> list[DreamTrip]:
+        """All parked trips, newest first. Pass ``profile_id`` to filter."""
+        query = """
+            SELECT id, profile_id, title, destination, notes, payload_json, created_at
+            FROM dream_box
+        """
+        params: tuple = ()
+        if profile_id is not None:
+            query += " WHERE profile_id = ?"
+            params = (profile_id,)
+        query += " ORDER BY created_at DESC, id DESC"
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(query, params)
+            return [
+                DreamTrip(
+                    id=r[0],
+                    profile_id=r[1],
+                    title=r[2],
+                    destination=r[3],
+                    notes=r[4],
+                    payload_json=r[5],
+                    created_at=r[6],
+                )
+                for r in cur
+            ]
+
+    def delete_dream_trip(self, dream_id: int) -> bool:
+        """Delete by id. Returns True if a row was removed, False if absent."""
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute("DELETE FROM dream_box WHERE id = ?", (dream_id,))
+            conn.commit()
+            return cur.rowcount > 0
 
     def fetch_train_amounts(self, key: str, *, window_days: int = 90) -> list[float]:
         cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
