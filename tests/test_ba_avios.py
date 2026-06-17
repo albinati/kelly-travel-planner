@@ -55,6 +55,22 @@ def test_taxes_note_flags_peak_and_confirmation():
     assert "BA.com" in note
 
 
-def test_oversize_distance_clamps_to_top_band():
-    # RFS only covers short/medium-haul; anything bigger clamps to Zone 4.
-    assert avios_cost(9999, "economy", date(2026, 3, 10))[0] == 10000
+def test_longhaul_distance_is_out_of_scope():
+    # RFS only covers short/medium-haul. Long-haul must NOT be priced from the
+    # short-haul chart — it returns None with a note pointing to BA.com, rather
+    # than silently clamping to a far-too-low figure.
+    avios, note = avios_cost(9999, "economy", date(2026, 3, 10))
+    assert avios is None
+    assert "BA.com" in note
+    assert "long-haul" in note
+
+
+def test_longhaul_business_also_out_of_scope():
+    # The 1.6x business approximation must not resurrect a long-haul number.
+    avios, _ = avios_cost(5359, "business", date(2026, 8, 9))  # SFO–LHR
+    assert avios is None
+
+
+def test_top_rfs_band_still_prices():
+    # The boundary itself (3000 mi) is still in scope and prices normally.
+    assert avios_cost(3000, "economy", date(2026, 3, 10))[0] == 10000
