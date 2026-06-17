@@ -377,10 +377,20 @@ class SqliteHistoryStore:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
+            # WAL persists on the DB file: concurrent readers + one writer, so the
+            # shared HTTP MCP server (and the CLI fallback) never trip over each
+            # other. Set once; harmless to re-assert.
+            conn.execute("PRAGMA journal_mode=WAL")
             self._migrate(conn)
             conn.executescript(_SCHEMA)
             conn.commit()
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open a connection that waits (up to 5s) for the write lock instead of
+        failing fast with ``database is locked`` — so overlapping writes from
+        concurrent clients serialise cleanly rather than erroring."""
+        return sqlite3.connect(self.db_path, timeout=5.0)
 
     @staticmethod
     def _migrate(conn: sqlite3.Connection) -> None:
@@ -433,7 +443,7 @@ class SqliteHistoryStore:
         row = {**asdict(obs), "observed_at": now}
         values = [row[c] for c in cols]
         placeholders = ",".join("?" * len(cols))
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 f"INSERT INTO train_observations ({','.join(cols)}) VALUES ({placeholders})",
                 values,
@@ -464,7 +474,7 @@ class SqliteHistoryStore:
         row = {**asdict(obs), "observed_at": now}
         values = [row[c] for c in cols]
         placeholders = ",".join("?" * len(cols))
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 f"INSERT INTO stay_observations ({','.join(cols)}) VALUES ({placeholders})",
                 values,
@@ -496,7 +506,7 @@ class SqliteHistoryStore:
         row = {**asdict(obs), "observed_at": now}
         values = [row[c] for c in cols]
         placeholders = ",".join("?" * len(cols))
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 f"INSERT INTO hotel_observations ({','.join(cols)}) VALUES ({placeholders})",
                 values,
@@ -530,7 +540,7 @@ class SqliteHistoryStore:
         row = {**asdict(obs), "observed_at": now, "trip_key": trip_key}
         values = [row[c] for c in cols]
         placeholders = ",".join("?" * len(cols))
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 f"INSERT INTO award_flight_observations ({','.join(cols)}) VALUES ({placeholders})",
                 values,
@@ -544,7 +554,7 @@ class SqliteHistoryStore:
         """Insert or overwrite the profile keyed by ``profile_id``. Returns the
         ``profile_id``. ``updated_at`` is stamped server-side on every write."""
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO profiles (profile_id, name, payload_json, updated_at)
@@ -560,7 +570,7 @@ class SqliteHistoryStore:
         return profile.profile_id
 
     def get_profile(self, profile_id: str) -> Profile | None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 """
                 SELECT profile_id, name, payload_json, updated_at
@@ -602,7 +612,7 @@ class SqliteHistoryStore:
 
     def add_session(self, session: TripSession) -> int:
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO trip_session
@@ -626,7 +636,7 @@ class SqliteHistoryStore:
             return int(cur.lastrowid or 0)
 
     def get_session(self, session_id: int) -> TripSession | None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 f"SELECT {self._SESSION_COLS} FROM trip_session WHERE id = ?",
                 (session_id,),
@@ -650,7 +660,7 @@ class SqliteHistoryStore:
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY created_at DESC, id DESC"
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(query, tuple(params))
             return [self._row_to_session(r) for r in cur]
 
@@ -672,14 +682,14 @@ class SqliteHistoryStore:
         assignments = ", ".join(f"{k} = ?" for k in sets)
         assignments = f"{assignments + ', ' if assignments else ''}updated_at = ?"
         params = [*sets.values(), now, session_id]
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(f"UPDATE trip_session SET {assignments} WHERE id = ?", params)
             conn.commit()
             return cur.rowcount > 0
 
     def delete_session(self, session_id: int) -> bool:
         """Delete a session and its option snapshots. Returns True if removed."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute("DELETE FROM trip_session WHERE id = ?", (session_id,))
             conn.execute("DELETE FROM session_option WHERE session_id = ?", (session_id,))
             conn.commit()
@@ -687,7 +697,7 @@ class SqliteHistoryStore:
 
     def add_session_option(self, opt: SessionOption) -> int:
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO session_option
@@ -712,7 +722,7 @@ class SqliteHistoryStore:
 
     def list_session_options(self, session_id: int) -> list[SessionOption]:
         """All option snapshots for a session, newest first."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 """
                 SELECT id, session_id, kind, label, price_amount, price_currency,
@@ -755,7 +765,7 @@ class SqliteHistoryStore:
     def fetch_train_amounts(self, key: str, *, window_days: int = 90) -> list[float]:
         cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
         cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 """
                 SELECT best_per_adult_amount FROM train_observations
@@ -770,7 +780,7 @@ class SqliteHistoryStore:
     def fetch_stay_amounts(self, key: str, *, window_days: int = 90) -> list[float]:
         cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
         cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 """
                 SELECT best_total_amount FROM stay_observations
@@ -800,7 +810,7 @@ class SqliteHistoryStore:
         row["currency"] = (row["currency"] or "").upper()
         values = [row[c] for c in cols]
         placeholders = ",".join("?" * len(cols))
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 f"INSERT INTO bookings ({','.join(cols)}) VALUES ({placeholders})",
                 values,
@@ -835,7 +845,7 @@ class SqliteHistoryStore:
                 WHERE rn = 1
                 ORDER BY leg ASC
             """
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(query, (trip_id,))
             return [
                 BookingRecord(
@@ -863,7 +873,7 @@ class SqliteHistoryStore:
     ) -> int:
         """Persist one EUR-base FX row. Idempotent via UNIQUE(as_of, base, quote, source)."""
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 """
                 INSERT OR IGNORE INTO fx_rates
@@ -883,7 +893,7 @@ class SqliteHistoryStore:
         quote_ccy: str,
         source: str = "ecb",
     ) -> float | None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 """
                 SELECT rate FROM fx_rates
@@ -898,7 +908,7 @@ class SqliteHistoryStore:
     def latest_fx_as_of(self, *, source: str = "ecb") -> str | None:
         """Most recent `as_of` we have any rate row for. Used to fall back when
         today's rates haven't been fetched yet but yesterday's are usable."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 "SELECT MAX(as_of) FROM fx_rates WHERE source = ?",
                 (source,),
@@ -909,7 +919,7 @@ class SqliteHistoryStore:
     def fetch_hotel_amounts(self, key: str, *, window_days: int = 90) -> list[float]:
         cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
         cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 """
                 SELECT best_total_amount FROM hotel_observations
