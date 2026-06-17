@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Install Kelly for OpenClaw as a shared, long-lived streamable-HTTP MCP server.
 #
-# One shared bearer-guarded process (systemd) serves OpenClaw (localhost) and,
-# optionally, remote Claude Code (over `tailscale serve`) — one SQLite, one truth,
-# no per-session "ghost" processes. See docs/HTTP-MCP-DEPLOY.md.
+# One shared bearer-guarded process (systemd) serves OpenClaw over loopback —
+# one SQLite, one truth, no per-session "ghost" processes. Kelly stays
+# loopback-only; for local Claude Code, use an SSH tunnel (printed at the end).
+# This script never touches `tailscale serve` (grabbing :443 would hijack other
+# services). See docs/HTTP-MCP-DEPLOY.md.
 #
 # One-liner (after this file is on your default branch):
 #   curl -fsSL --proto '=https' --tlsv1.2 \
@@ -24,14 +26,13 @@
 #   --dry-run         Print actions only
 #   --no-register     Install + service only; skip OpenClaw registration
 #   --no-service      Install + token only; skip systemd (e.g. CLI-only host)
-#   --tailscale-serve Front the loopback server with `tailscale serve` (remote access)
 #   --browsers        Also run `patchright install chromium` (Eurostar scraping)
 #   --dir PATH        Same as KELLY_INSTALL_DIR
 #   --port N          Same as KELLY_MCP_PORT
 
 set -euo pipefail
 
-DRY_RUN=0; NO_REGISTER=0; NO_SERVICE=0; TS_SERVE=0; BROWSERS=0
+DRY_RUN=0; NO_REGISTER=0; NO_SERVICE=0; BROWSERS=0
 INSTALL_DIR="${KELLY_INSTALL_DIR:-$HOME/kelly-travel-planner}"
 REPO_URL="${KELLY_REPO_URL:-https://github.com/albinati/kelly-travel-planner.git}"
 BRANCH="${KELLY_GIT_BRANCH:-main}"
@@ -39,14 +40,13 @@ SERVICE_USER="${KELLY_SERVICE_USER:-${SUDO_USER:-$USER}}"
 PORT="${KELLY_MCP_PORT:-8765}"
 HOST="${KELLY_MCP_HOST:-127.0.0.1}"
 
-usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; echo; echo "Usage: $0 [--dry-run] [--no-register] [--no-service] [--tailscale-serve] [--browsers] [--dir PATH] [--port N]"; }
+usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; echo; echo "Usage: $0 [--dry-run] [--no-register] [--no-service] [--browsers] [--dir PATH] [--port N]"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --no-register) NO_REGISTER=1; shift ;;
     --no-service) NO_SERVICE=1; shift ;;
-    --tailscale-serve) TS_SERVE=1; shift ;;
     --browsers) BROWSERS=1; shift ;;
     --dir) INSTALL_DIR="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
@@ -165,36 +165,34 @@ UNIT
   fi
 fi
 
-# --- 5. tailscale serve (remote access for local Claude Code) ---
-if [[ "$TS_SERVE" == 1 ]]; then
-  need_cmd tailscale
-  echo "Fronting 127.0.0.1:${PORT} with tailscale serve (https) ..." >&2
-  run $SUDO tailscale serve --bg --https=443 "http://127.0.0.1:${PORT}" || \
-    echo "WARN: tailscale serve failed; run it manually (see docs/HTTP-MCP-DEPLOY.md)." >&2
-  run tailscale serve status || true
-fi
-
-# --- 6. register with OpenClaw (HTTP transport) ---
-MCP_URL="http://127.0.0.1:${PORT}/mcp"
+# --- 5. register with OpenClaw (streamable-HTTP transport, loopback) ---
+# OpenClaw stores servers under mcp.servers.<name> as {url, transport, headers};
+# it is NOT the Claude-Code {type:"http", mcpServers} shape. Use the openclaw CLI
+# (which probes), falling back to a correctly-shaped JSON merge.
+MCP_URL="http://127.0.0.1:${PORT}/mcp"   # no trailing slash (/mcp/ 307-redirects)
 register_cli() {
   command -v openclaw >/dev/null 2>&1 || return 1
-  export MCP_URL TOKEN
-  local json; json="$(python3 -c 'import json,os; print(json.dumps({"type":"http","url":os.environ["MCP_URL"],"headers":{"Authorization":"Bearer "+os.environ["TOKEN"]}}))')"
-  echo "Registering MCP 'kelly' (http) via OpenClaw CLI ..." >&2
-  run openclaw mcp set kelly "$json"
-  run openclaw gateway restart || true
+  echo "Registering MCP 'kelly' (streamable-http) via 'openclaw mcp add' ..." >&2
+  run openclaw mcp add kelly \
+    --url "$MCP_URL" \
+    --transport streamable-http \
+    --header "Authorization=Bearer ${TOKEN}" \
+    --timeout 120 || run openclaw mcp set kelly \
+    "$(MCP_URL="$MCP_URL" TOKEN="$TOKEN" python3 -c 'import json,os; print(json.dumps({"url":os.environ["MCP_URL"],"transport":"streamable-http","headers":{"Authorization":"Bearer "+os.environ["TOKEN"]}}))')"
+  run openclaw mcp reload || true
 }
 merge_json() {
   local cfg="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
   export MCP_URL TOKEN cfg
-  echo "Merging mcpServers.kelly (http) into $cfg ..." >&2
+  echo "Merging mcp.servers.kelly (streamable-http) into $cfg ..." >&2
   run python3 <<'PY'
 import json, os
 from pathlib import Path
 cfg = Path(os.environ["cfg"])
-entry = {"type":"http","url":os.environ["MCP_URL"],"headers":{"Authorization":"Bearer "+os.environ["TOKEN"]}}
+entry = {"url": os.environ["MCP_URL"], "transport": "streamable-http",
+         "headers": {"Authorization": "Bearer " + os.environ["TOKEN"]}}
 data = json.loads(cfg.read_text(encoding="utf-8")) if cfg.exists() else {}
-data.setdefault("mcpServers", {})["kelly"] = entry
+data.setdefault("mcp", {}).setdefault("servers", {})["kelly"] = entry
 if cfg.exists(): cfg.replace(cfg.with_name(cfg.name + ".bak"))
 cfg.parent.mkdir(parents=True, exist_ok=True)
 cfg.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -204,11 +202,12 @@ PY
 if [[ "$NO_REGISTER" == 1 ]]; then
   echo "Skipping OpenClaw registration (--no-register)." >&2
 else
-  register_cli || { echo "openclaw CLI not found; writing config JSON instead." >&2; merge_json; echo "Restart the OpenClaw gateway." >&2; }
+  register_cli || { echo "openclaw CLI not found; writing config JSON instead." >&2; merge_json; echo "Reload OpenClaw (openclaw mcp reload) or restart the gateway." >&2; }
 fi
 
 echo "" >&2
 echo "kelly-mcp-http: $HTTP_BIN  (http://127.0.0.1:${PORT}/mcp)" >&2
 echo "secrets/token : $ENV_FILE   trips: $INSTALL_DIR/config/kelly.md" >&2
 echo "Next: seed data ->  KELLY=\"$VENV/bin/kelly\" bash \"$INSTALL_DIR/scripts/seed-kelly-data.sh\"" >&2
-echo "For local Claude Code over Tailscale, see docs/HTTP-MCP-DEPLOY.md §5." >&2
+echo "Local Claude Code: SSH-tunnel the loopback port (no Tailscale port needed):" >&2
+echo "  ssh -fN -L ${PORT}:127.0.0.1:${PORT} <this-host>   # then .mcp.json url=http://127.0.0.1:${PORT}/mcp" >&2
