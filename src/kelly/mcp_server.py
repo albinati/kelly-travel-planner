@@ -43,6 +43,14 @@ from kelly.services.profile_service import (
     remove_dream_trip as profile_remove_dream_trip,
     set_profile as profile_set_profile,
 )
+from kelly.services.session_service import (
+    attach_option as session_attach_option,
+    create_session as session_create,
+    delete_session as session_delete,
+    get_session as session_get,
+    list_sessions as session_list,
+    update_session as session_update,
+)
 from kelly.services.summary_service import summarize_trip
 from kelly.services.stay_service import search_stay, stay_result_to_jsonable
 from kelly.services.train_service import search_train, train_result_to_jsonable
@@ -810,6 +818,113 @@ def kelly_dreambox_remove(id: int) -> str:
     with that id exists.
     """
     return json.dumps(profile_remove_dream_trip(id), default=str)
+
+
+@mcp.tool()
+def kelly_session_create(
+    title: str,
+    destination: str = "",
+    notes: str = "",
+    profile_id: str = "",
+    intent_json: str = "",
+    payload_json: str = "",
+    status: str = "active",
+) -> str:
+    """Create a trip-planning session (dossier) and return the stored row.
+
+    A session bundles a search **intent** with the dated option snapshots it
+    surfaces, across a lifecycle: ``idea → active → shortlisted → booked →
+    archived``. ``status`` defaults to ``active``; pass ``idea`` to park it like a
+    dream-box entry. ``intent_json`` (who / from / to / dates / pax / constraints)
+    and ``payload_json`` are free-form JSON strings stored verbatim; both are
+    validated and return ``{"error": "..."}`` if they don't parse. Attach options
+    later with ``kelly_session_attach_option``.
+    """
+    return json.dumps(
+        session_create(title, destination, notes, profile_id, intent_json, payload_json, status),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_session_list(profile_id: str = "", status: str = "") -> str:
+    """List trip sessions, newest first.
+
+    Filter by ``profile_id`` and/or ``status`` (``idea|active|shortlisted|booked|
+    archived``); omit both for all. Returns ``{"sessions": [...]}`` (without the
+    per-session option snapshots — use ``kelly_session_get`` for those).
+    """
+    return json.dumps(session_list(profile_id, status), default=str)
+
+
+@mcp.tool()
+def kelly_session_get(id: int) -> str:
+    """Return one session plus its dated option snapshots, or ``{"error": "..."}``.
+
+    Each option carries a ``captured_at`` timestamp — a stored snapshot reflects
+    what was true *then*, never guaranteed-current pricing.
+    """
+    return json.dumps(session_get(id), default=str)
+
+
+@mcp.tool()
+def kelly_session_update(
+    id: int,
+    status: str = "",
+    title: str = "",
+    notes: str = "",
+    destination: str = "",
+    intent_json: str = "",
+    payload_json: str = "",
+) -> str:
+    """Patch a session (blank args are left untouched) and re-stamp ``updated_at``.
+
+    Common use is moving ``status`` along the lifecycle (e.g. to ``archived`` or
+    ``booked``). ``intent_json`` / ``payload_json`` are validated as JSON. Returns
+    the updated session with its options, or ``{"error": "..."}``.
+    """
+    return json.dumps(
+        session_update(id, status, title, notes, destination, intent_json, payload_json),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_session_attach_option(
+    session_id: int,
+    kind: str,
+    label: str = "",
+    amount: str = "",
+    currency: str = "",
+    avios_points: int = 0,
+    source: str = "manual",
+    payload_json: str = "",
+) -> str:
+    """Append a dated option snapshot to a session; return the created snapshot.
+
+    ``kind`` ∈ ``cash_flight|avios|train|stay|experience|car|local|other``.
+    ``amount`` (+ ``currency``) is the cash price — leave blank for avios-only
+    options. ``avios_points`` is a **separate currency**, reported but never folded
+    into cash. ``source`` records provenance (``serpapi|seats_aero|eurostar|
+    manual|...``). ``payload_json`` carries the full option blob (times, flight
+    numbers, the BA.com-confirm note, etc.). Snapshots are append-only and
+    timestamped, so re-attaching later builds a price history.
+    """
+    return json.dumps(
+        session_attach_option(
+            session_id, kind, label, amount, currency, avios_points, source, payload_json
+        ),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_session_remove(id: int) -> str:
+    """Delete a session and all its option snapshots by ``id``.
+
+    Returns ``{"deleted": id}`` on success, or ``{"error": "..."}`` if absent.
+    """
+    return json.dumps(session_delete(id), default=str)
 
 
 @mcp.resource("kelly://config", mime_type="text/markdown")

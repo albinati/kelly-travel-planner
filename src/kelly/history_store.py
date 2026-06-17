@@ -151,10 +151,15 @@ class Profile:
 
 
 @dataclass
-class DreamTrip:
-    """One parked future-trip idea ("dream box"). Append-only with a delete:
-    list it, then remove by ``id``. ``payload_json`` holds any extra structured
-    notes (budget hints, candidate dates, must-dos)."""
+class TripSession:
+    """A trip-planning session ("dossier") across a lifecycle:
+    ``idea → active → shortlisted → booked → archived``. A parked dream-box idea
+    is simply a session with ``status='idea'``. ``intent_json`` holds the search
+    intent (who/from/to/dates/pax/constraints); ``payload_json`` holds any extra
+    structured notes. Dated option snapshots hang off it via ``SessionOption``.
+
+    The physical table is ``trip_session`` (renamed from the legacy ``dream_box``
+    by an additive migration — see ``SqliteHistoryStore._migrate``)."""
 
     id: int | None
     profile_id: str | None
@@ -163,6 +168,33 @@ class DreamTrip:
     notes: str | None
     payload_json: str | None
     created_at: str | None = None
+    status: str = "idea"
+    intent_json: str | None = None
+    updated_at: str | None = None
+
+
+# Back-compat alias: the dream-box was the first lifecycle stage of a session.
+DreamTrip = TripSession
+
+
+@dataclass
+class SessionOption:
+    """One dated option snapshot attached to a :class:`TripSession`. Append-only:
+    re-quoting later appends a fresh row with a new ``captured_at``, giving a
+    price time-series for free. A stored snapshot is **never** "current truth" —
+    its ``captured_at`` says when it was real. ``avios_points`` is a separate
+    currency and is never folded into ``price_amount``."""
+
+    id: int | None
+    session_id: int
+    kind: str  # cash_flight|avios|train|stay|experience|car|local|other
+    label: str | None
+    price_amount: float | None
+    price_currency: str | None
+    avios_points: int | None
+    source: str | None  # serpapi|seats_aero|eurostar|manual|...
+    payload_json: str | None
+    captured_at: str | None = None
 
 
 @dataclass
@@ -308,17 +340,36 @@ CREATE TABLE IF NOT EXISTS profiles (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS dream_box (
+CREATE TABLE IF NOT EXISTS trip_session (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     profile_id TEXT,
     title TEXT NOT NULL,
     destination TEXT,
     notes TEXT,
     payload_json TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'idea',
+    intent_json TEXT,
+    updated_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_dream_box_profile
-    ON dream_box(profile_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_trip_session_profile
+    ON trip_session(profile_id, status, created_at);
+
+CREATE TABLE IF NOT EXISTS session_option (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    captured_at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    label TEXT,
+    price_amount REAL,
+    price_currency TEXT,
+    avios_points INTEGER,
+    source TEXT,
+    payload_json TEXT,
+    FOREIGN KEY(session_id) REFERENCES trip_session(id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_option
+    ON session_option(session_id, captured_at);
 """
 
 
@@ -327,7 +378,37 @@ class SqliteHistoryStore:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.db_path) as conn:
+            self._migrate(conn)
             conn.executescript(_SCHEMA)
+            conn.commit()
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Additive, non-destructive migrations that must run *before* the schema
+        DDL (the DDL's ``trip_session`` index references columns added here).
+
+        1. Rename the legacy ``dream_box`` table to ``trip_session`` (SQLite
+           preserves all rows).
+        2. Backfill the session columns added after the table first shipped.
+
+        Both steps are guarded so reopening an already-migrated DB is a no-op, and
+        a fresh DB (no ``trip_session`` yet) is left for ``executescript`` to
+        create with the full schema."""
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "dream_box" in tables and "trip_session" not in tables:
+            conn.execute("ALTER TABLE dream_box RENAME TO trip_session")
+            tables.add("trip_session")
+
+        if "trip_session" in tables:
+            existing = {r[1] for r in conn.execute("PRAGMA table_info(trip_session)")}
+            additions = {
+                "status": "TEXT NOT NULL DEFAULT 'idea'",
+                "intent_json": "TEXT",
+                "updated_at": "TEXT",
+            }
+            for col, decl in additions.items():
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE trip_session ADD COLUMN {col} {decl}")
 
     def append_train(self, obs: TrainObservation) -> int:
         now = datetime.now(timezone.utc).isoformat()
@@ -497,61 +578,179 @@ class SqliteHistoryStore:
                 updated_at=row[3],
             )
 
-    # --- Dream box (append + list + delete) --------------------------------
+    # --- Trip sessions (dossiers) + dated option snapshots -----------------
 
-    def add_dream_trip(self, trip: DreamTrip) -> int:
+    _SESSION_COLS = (
+        "id, profile_id, title, destination, notes, payload_json, "
+        "created_at, status, intent_json, updated_at"
+    )
+
+    @staticmethod
+    def _row_to_session(r: tuple) -> TripSession:
+        return TripSession(
+            id=r[0],
+            profile_id=r[1],
+            title=r[2],
+            destination=r[3],
+            notes=r[4],
+            payload_json=r[5],
+            created_at=r[6],
+            status=r[7],
+            intent_json=r[8],
+            updated_at=r[9],
+        )
+
+    def add_session(self, session: TripSession) -> int:
         now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             cur = conn.execute(
                 """
-                INSERT INTO dream_box
-                    (profile_id, title, destination, notes, payload_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO trip_session
+                    (profile_id, title, destination, notes, payload_json,
+                     created_at, status, intent_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    trip.profile_id,
-                    trip.title,
-                    trip.destination,
-                    trip.notes,
-                    trip.payload_json,
+                    session.profile_id,
+                    session.title,
+                    session.destination,
+                    session.notes,
+                    session.payload_json,
+                    now,
+                    session.status or "idea",
+                    session.intent_json,
                     now,
                 ),
             )
             conn.commit()
             return int(cur.lastrowid or 0)
 
-    def list_dream_trips(self, profile_id: str | None = None) -> list[DreamTrip]:
-        """All parked trips, newest first. Pass ``profile_id`` to filter."""
-        query = """
-            SELECT id, profile_id, title, destination, notes, payload_json, created_at
-            FROM dream_box
-        """
-        params: tuple = ()
+    def get_session(self, session_id: int) -> TripSession | None:
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                f"SELECT {self._SESSION_COLS} FROM trip_session WHERE id = ?",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            return self._row_to_session(row) if row else None
+
+    def list_sessions(
+        self, profile_id: str | None = None, status: str | None = None
+    ) -> list[TripSession]:
+        """Sessions newest first; optionally filtered by ``profile_id`` / ``status``."""
+        query = f"SELECT {self._SESSION_COLS} FROM trip_session"
+        clauses: list[str] = []
+        params: list = []
         if profile_id is not None:
-            query += " WHERE profile_id = ?"
-            params = (profile_id,)
+            clauses.append("profile_id = ?")
+            params.append(profile_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY created_at DESC, id DESC"
         with sqlite3.connect(self.db_path) as conn:
-            cur = conn.execute(query, params)
+            cur = conn.execute(query, tuple(params))
+            return [self._row_to_session(r) for r in cur]
+
+    def update_session(self, session_id: int, **fields: str | None) -> bool:
+        """Patch ``status`` / ``title`` / ``notes`` / ``destination`` /
+        ``intent_json`` / ``payload_json`` and re-stamp ``updated_at``. Unknown
+        keys are ignored; ``None`` values are skipped. Returns True if a row
+        matched."""
+        allowed = {
+            "status",
+            "title",
+            "notes",
+            "destination",
+            "intent_json",
+            "payload_json",
+        }
+        sets = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        now = datetime.now(timezone.utc).isoformat()
+        assignments = ", ".join(f"{k} = ?" for k in sets)
+        assignments = f"{assignments + ', ' if assignments else ''}updated_at = ?"
+        params = [*sets.values(), now, session_id]
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(f"UPDATE trip_session SET {assignments} WHERE id = ?", params)
+            conn.commit()
+            return cur.rowcount > 0
+
+    def delete_session(self, session_id: int) -> bool:
+        """Delete a session and its option snapshots. Returns True if removed."""
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute("DELETE FROM trip_session WHERE id = ?", (session_id,))
+            conn.execute("DELETE FROM session_option WHERE session_id = ?", (session_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
+    def add_session_option(self, opt: SessionOption) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO session_option
+                    (session_id, captured_at, kind, label, price_amount,
+                     price_currency, avios_points, source, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    opt.session_id,
+                    now,
+                    opt.kind,
+                    opt.label,
+                    opt.price_amount,
+                    (opt.price_currency or "").upper() or None,
+                    opt.avios_points,
+                    opt.source,
+                    opt.payload_json,
+                ),
+            )
+            conn.commit()
+            return int(cur.lastrowid or 0)
+
+    def list_session_options(self, session_id: int) -> list[SessionOption]:
+        """All option snapshots for a session, newest first."""
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute(
+                """
+                SELECT id, session_id, kind, label, price_amount, price_currency,
+                       avios_points, source, payload_json, captured_at
+                FROM session_option WHERE session_id = ?
+                ORDER BY captured_at DESC, id DESC
+                """,
+                (session_id,),
+            )
             return [
-                DreamTrip(
+                SessionOption(
                     id=r[0],
-                    profile_id=r[1],
-                    title=r[2],
-                    destination=r[3],
-                    notes=r[4],
-                    payload_json=r[5],
-                    created_at=r[6],
+                    session_id=r[1],
+                    kind=r[2],
+                    label=r[3],
+                    price_amount=float(r[4]) if r[4] is not None else None,
+                    price_currency=r[5],
+                    avios_points=r[6],
+                    source=r[7],
+                    payload_json=r[8],
+                    captured_at=r[9],
                 )
                 for r in cur
             ]
 
+    # --- Dream box (back-compat shims over sessions, status='idea') ---------
+
+    def add_dream_trip(self, trip: DreamTrip) -> int:
+        trip.status = trip.status or "idea"
+        return self.add_session(trip)
+
+    def list_dream_trips(self, profile_id: str | None = None) -> list[DreamTrip]:
+        """All parked *idea* sessions, newest first. Pass ``profile_id`` to filter."""
+        return self.list_sessions(profile_id=profile_id, status="idea")
+
     def delete_dream_trip(self, dream_id: int) -> bool:
         """Delete by id. Returns True if a row was removed, False if absent."""
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.execute("DELETE FROM dream_box WHERE id = ?", (dream_id,))
-            conn.commit()
-            return cur.rowcount > 0
+        return self.delete_session(dream_id)
 
     def fetch_train_amounts(self, key: str, *, window_days: int = 90) -> list[float]:
         cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
