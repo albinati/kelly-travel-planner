@@ -11,6 +11,14 @@ approximated at ~1.6x the economy figure — BA does not publish a clean
 distance chart for Club Europe RFS, so this is a *documented approximation*
 flagged for confirmation on BA.com.
 
+**Long-haul is deliberately out of scope.** RFS only covers short/medium-haul
+(<= 3000 mi). Long-haul awards (e.g. transatlantic Club World) live on BA's
+*distance-based reward chart* with much larger Avios numbers and high carrier
+surcharges that this module does NOT model. For any distance beyond the top
+RFS band, ``avios_cost`` returns ``None`` with a note telling the caller to
+confirm on BA.com — rather than silently clamping to a wrong, far-too-low
+short-haul figure.
+
 Peak vs off-peak follows BA's peak calendar. For the MVP we treat **all of
 July and August 2026 as PEAK** — this is approximate (the real BA calendar has
 specific peak date ranges) and the returned ``taxes_note`` says so. Always
@@ -32,6 +40,10 @@ _ECONOMY_BANDS: list[tuple[int, int, int]] = [
 
 # Club Europe (business) is approximated as this multiple of the economy band.
 _BUSINESS_MULTIPLIER = 1.6
+
+# Top of the RFS-covered range. Anything beyond this is long-haul and is not
+# modelled here (see module docstring) — we return ``None`` instead of guessing.
+_RFS_MAX_DISTANCE_MI = _ECONOMY_BANDS[-1][0]
 
 
 def _is_business(cabin: str) -> bool:
@@ -57,9 +69,9 @@ def is_peak(dt: date) -> bool:
 def _economy_band(distance_mi: int) -> tuple[int, int]:
     """Return (off_peak, peak) economy Avios for *distance_mi*.
 
-    Distances beyond the top published band clamp to the largest band rather
-    than erroring — RFS only covers short/medium-haul, so anything bigger is
-    out-of-scope and the caller should treat it as a coarse upper bound.
+    Callers must only pass RFS-covered distances (<= ``_RFS_MAX_DISTANCE_MI``);
+    ``avios_cost`` guards larger distances before reaching here. The trailing
+    return is a defensive default and is not used for in-scope distances.
     """
     for upper, off_peak, peak in _ECONOMY_BANDS:
         if distance_mi <= upper:
@@ -68,7 +80,7 @@ def _economy_band(distance_mi: int) -> tuple[int, int]:
     return off_peak, peak
 
 
-def avios_cost(distance_mi: int, cabin: str, dt: date) -> tuple[int, str]:
+def avios_cost(distance_mi: int, cabin: str, dt: date) -> tuple[int | None, str]:
     """Avios per person, one way, for a BA Reward Flight Saver seat.
 
     Args:
@@ -76,11 +88,26 @@ def avios_cost(distance_mi: int, cabin: str, dt: date) -> tuple[int, str]:
         cabin: ``"economy"`` / ``"business"`` (and common synonyms).
         dt: travel date — selects the peak vs off-peak band.
 
-    Returns ``(avios_per_person_one_way, taxes_note)``. The note flags that the
+    Returns ``(avios_per_person_one_way, note)``. The note flags that the
     figure is approximate and that taxes/fees are separate and must be confirmed
     on BA.com.
+
+    For long-haul distances beyond the RFS-covered range (> ``_RFS_MAX_DISTANCE_MI``)
+    the Avios component is returned as ``None`` (out of scope — RFS does not cover
+    long-haul, and clamping to the top short-haul band would be badly wrong); the
+    note tells the caller to confirm on BA.com.
     """
-    off_peak, peak = _economy_band(int(distance_mi))
+    distance_mi = int(distance_mi)
+    if distance_mi > _RFS_MAX_DISTANCE_MI:
+        note = (
+            f"long-haul ({distance_mi} mi) beyond the RFS chart "
+            f"(<= {_RFS_MAX_DISTANCE_MI} mi) — not modelled; this route prices on BA's "
+            "distance-based reward chart (far more Avios + carrier surcharges). "
+            "Confirm Avios + taxes on BA.com"
+        )
+        return None, note
+
+    off_peak, peak = _economy_band(distance_mi)
     peak_flag = is_peak(dt)
     economy_avios = peak if peak_flag else off_peak
 
