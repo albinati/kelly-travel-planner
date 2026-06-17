@@ -31,6 +31,7 @@ KELLY_MCP_TOKEN=<openssl rand -hex 32>     # REQUIRED — server refuses to star
 KELLY_MCP_HOST=127.0.0.1                    # bind localhost; Tailscale fronts remote access
 KELLY_MCP_PORT=8765
 KELLY_DATA_DIR=/opt/kelly-travel-planner/data
+# KELLY_MCP_ALLOWED_HOSTS=host.tailnet.ts.net   # optional — see note below
 # providers (only on the server — clients never need these)
 SEATSAERO_API_KEY=...
 LITEAPI_API_KEY=...
@@ -38,6 +39,13 @@ LITEAPI_API_KEY=...
 
 Generate the token once: `openssl rand -hex 32`. Keep `.env` readable only by the
 service user.
+
+**Host policy:** FastMCP's DNS-rebinding guard rejects requests whose `Host`
+isn't localhost (you'd see HTTP **421** when reaching the server through
+`tailscale serve`). Because the server is already bearer-gated, loopback-bound,
+and tailnet-only, that browser-origin guard is disabled by default. To re-enable
+it with an explicit allowlist instead, set `KELLY_MCP_ALLOWED_HOSTS` to a CSV of
+hostnames (e.g. your `*.ts.net` name) and restart.
 
 ## 3. Run it as a service
 

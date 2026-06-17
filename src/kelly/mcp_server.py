@@ -103,6 +103,30 @@ def _trip_prefix() -> str:
     return f"{raw} " if raw and not raw.endswith(" ") else raw
 
 
+def _transport_security():
+    """Host/Origin policy for the HTTP transport.
+
+    FastMCP's DNS-rebinding guard validates the ``Host`` header against an
+    allowlist (default: localhost). Behind ``tailscale serve`` the proxied Host
+    is the tailnet domain, which the guard rejects with 421. Since the HTTP
+    server is already bearer-gated, bound to loopback, and reachable only over
+    the tailnet, that browser-origin guard adds nothing — so disable it by
+    default. Set ``KELLY_MCP_ALLOWED_HOSTS`` (CSV) to re-enable it with an
+    explicit allowlist instead.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    raw = os.environ.get("KELLY_MCP_ALLOWED_HOSTS", "").strip()
+    if raw:
+        hosts = [h.strip() for h in raw.split(",") if h.strip()]
+        return TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=hosts,
+            allowed_origins=hosts,
+        )
+    return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+
 mcp = FastMCP(
     "Kelly",
     instructions=(
@@ -111,6 +135,7 @@ mcp = FastMCP(
         "drives a stealth Chromium against eurostar.com. Searches are persisted to a local SQLite "
         "file (KELLY_DATA_DIR) so we can build per-trip price baselines over time."
     ),
+    transport_security=_transport_security(),
 )
 
 
