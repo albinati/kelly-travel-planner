@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "kelly"
 version = "0.2.0"
-description = "Group trip planner: Eurostar trains + Airbnb stays from a Markdown config, with SQLite price baselines and a stdio MCP server."
+description = "Group trip planner: Eurostar trains + Airbnb stays from a Markdown config, with SQLite price baselines, a Typer CLI, and stdio + streamable-HTTP MCP servers."
 readme = "README.md"
 authors = ["Kelly contributors"]
 packages = [{ include = "kelly", from = "src" }]
@@ -17,9 +17,10 @@ python-dotenv = "^1.2"
 pyairbnb = "^2.2.1"
 patchright = "^1.59.1"
 mcp = { version = "^1.27", optional = true }
+uvicorn = { version = "^0.34", optional = true }
 
 [tool.poetry.extras]
-mcp = ["mcp"]
+mcp = ["mcp", "uvicorn"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
@@ -28,6 +29,7 @@ ruff = "^0.9.0"
 [tool.poetry.scripts]
 kelly = "kelly.cli:main"
 kelly-mcp = "kelly.mcp_server:main"
+kelly-mcp-http = "kelly.mcp_server:main_http"
 
 [build-system]
 requires = ["poetry-core>=2.0,<3"]

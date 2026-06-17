@@ -1,0 +1,38 @@
+# Kelly — streamable-HTTP MCP server (systemd unit).
+#
+# One long-lived, bearer-guarded process shared by every client (OpenClaw on
+# localhost + remote Claude Code over Tailscale). Install:
+#
+#   sudo cp deploy/kelly-mcp.service /etc/systemd/system/kelly-mcp.service
+#   # edit User/paths below to match the install, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kelly-mcp
+#   systemctl status kelly-mcp
+#   curl -s http://127.0.0.1:8765/healthz      # -> {"status":"ok"}
+#
+# Config (KELLY_MCP_TOKEN/HOST/PORT, KELLY_DATA_DIR, SEATSAERO_API_KEY, ...) lives
+# in the repo-root .env, which Kelly auto-loads from WorkingDirectory. Generate a
+# token once: `openssl rand -hex 32` -> put it in .env as KELLY_MCP_TOKEN=...
+
+[Unit]
+Description=Kelly trip planner — streamable-HTTP MCP server
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/opt/kelly-travel-planner
+ExecStart=/opt/kelly-travel-planner/.venv/bin/kelly-mcp-http
+Restart=on-failure
+RestartSec=3
+
+# Hardening (loosen only if it blocks Chromium/patchright on your box)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/kelly-travel-planner
+
+[Install]
+WantedBy=multi-user.target

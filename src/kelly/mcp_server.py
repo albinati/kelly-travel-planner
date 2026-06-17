@@ -1,10 +1,16 @@
-"""MCP server (stdio) for Kelly — group trip planning over Eurostar + Airbnb.
+"""MCP server for Kelly — group trip planning over Eurostar + Airbnb.
 
-Install with `poetry install --extras mcp`.
+Install with `poetry install --extras mcp`. Two entrypoints:
+
+- ``kelly-mcp``       — stdio transport (one host spawns one child process).
+- ``kelly-mcp-http``  — long-lived, bearer-guarded streamable-HTTP server. One
+  shared process serves every client (OpenClaw on localhost + remote Claude Code
+  over Tailscale), so there are no per-session children to orphan ("ghosts").
 """
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 from datetime import date
@@ -936,9 +942,76 @@ def kelly_config_resource() -> str:
     return path.read_text(encoding="utf-8")
 
 
+class _BearerAuthASGI:
+    """Gate every HTTP request behind a bearer token.
+
+    Pure ASGI (not Starlette's ``BaseHTTPMiddleware``) so it never buffers the
+    streamable-HTTP response stream. ``lifespan``/``websocket`` scopes pass
+    straight through; ``GET /healthz`` answers 200 without auth for liveness
+    probes. The token compare is constant-time.
+    """
+
+    def __init__(self, app, token: str) -> None:
+        self._app = app
+        self._expected = b"Bearer " + token.encode()
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        if scope.get("path") == "/healthz":
+            await self._respond(send, 200, b'{"status":"ok"}')
+            return
+        presented = dict(scope.get("headers") or []).get(b"authorization", b"")
+        if hmac.compare_digest(presented, self._expected):
+            await self._app(scope, receive, send)
+            return
+        await self._respond(send, 401, b'{"error":"unauthorized"}')
+
+    @staticmethod
+    async def _respond(send, status: int, body: bytes) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+
 def main() -> None:
-    """Entrypoint for `kelly-mcp` script — runs the stdio MCP server."""
+    """Entrypoint for `kelly-mcp` — the stdio MCP server (one child per host)."""
     mcp.run()
+
+
+def main_http() -> None:
+    """Entrypoint for `kelly-mcp-http` — long-lived, bearer-guarded HTTP server.
+
+    One shared process; clients are HTTP connections, not child processes — so
+    no per-session "ghost" processes accumulate. Refuses to start unauthenticated.
+
+    Env:
+      KELLY_MCP_TOKEN  required bearer token (fail-closed if unset/empty)
+      KELLY_MCP_HOST   bind address (default 127.0.0.1 — set to the Tailscale IP,
+                       or front it with `tailscale serve`, to reach it remotely)
+      KELLY_MCP_PORT   bind port (default 8765)
+    """
+    import uvicorn
+
+    token = os.environ.get("KELLY_MCP_TOKEN", "").strip()
+    if not token:
+        raise SystemExit(
+            "KELLY_MCP_TOKEN is required to run the HTTP MCP server "
+            "(refusing to serve unauthenticated)."
+        )
+    host = os.environ.get("KELLY_MCP_HOST", "127.0.0.1")
+    port = int(os.environ.get("KELLY_MCP_PORT", "8765"))
+    app = _BearerAuthASGI(mcp.streamable_http_app(), token)
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

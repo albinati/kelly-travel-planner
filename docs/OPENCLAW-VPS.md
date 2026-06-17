@@ -1,5 +1,12 @@
 # Kelly + OpenClaw on a VPS
 
+> **⚠️ Use the HTTP server under OpenClaw.** The stdio path below spawns one
+> `kelly-mcp` child **per session** and leaked **ghost processes** (resident RAM)
+> on the VPS. The supported deployment is the long-lived, bearer-guarded
+> **streamable-HTTP** server (`kelly-mcp-http`), shared by OpenClaw + remote
+> Claude Code over Tailscale → **[HTTP-MCP-DEPLOY.md](HTTP-MCP-DEPLOY.md)**. The
+> stdio instructions below are retained for single-host/local use only.
+
 Kelly’s MCP server uses **stdio**: OpenClaw (or its gateway) **spawns** `kelly-mcp` as a child process. Kelly must live **on the same machine** as that process (same VPS/container namespace). You do **not** open a public TCP port for Kelly when using stdio.
 
 ## Scripted install (`curl | bash`, like OpenClaw’s installer)
