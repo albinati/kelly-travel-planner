@@ -1,6 +1,15 @@
 # MCP host setup
 
-Kelly ships a **stdio** MCP server: `kelly-mcp` (after `poetry install --extras mcp`). 4 tools + 1 resource — see [main README](../README.md) for the catalog.
+> **Deploying for OpenClaw + a shared store?** Use the **streamable-HTTP** server
+> (`kelly-mcp-http`) — one long-lived, bearer-guarded process that OpenClaw and
+> remote Claude Code both connect to, sharing one SQLite. See
+> **[HTTP-MCP-DEPLOY.md](HTTP-MCP-DEPLOY.md)**. The stdio notes below remain valid
+> for a single local host (e.g. desktop Claude Code) but spawn one child per
+> session — don't use stdio under OpenClaw (it caused the ghost-session leak).
+
+Kelly ships a **stdio** MCP server: `kelly-mcp` and a **streamable-HTTP** server
+`kelly-mcp-http` (both after `poetry install --extras mcp`). 25 tools + 1 resource
+— see [main README](../README.md) for the catalog.
 
 **Running OpenClaw on a VPS?** See [OPENCLAW-VPS.md](OPENCLAW-VPS.md) for clone, Poetry, absolute paths, `openclaw.json` example, and a **`curl | bash` installer** ([`scripts/install-openclaw-kelly.sh`](../scripts/install-openclaw-kelly.sh)).
 
