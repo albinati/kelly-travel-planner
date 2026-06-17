@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "kelly"
 version = "0.2.0"
-description = "Group trip planner: Eurostar trains + Airbnb stays from a Markdown config, with SQLite price baselines and a stdio MCP server."
+description = "Group trip planner: Eurostar trains + Airbnb stays from a Markdown config, with SQLite price baselines and a CLI surface (the `kelly` command)."
 readme = "README.md"
 authors = ["Kelly contributors"]
 packages = [{ include = "kelly", from = "src" }]
@@ -27,7 +27,11 @@ ruff = "^0.9.0"
 
 [tool.poetry.scripts]
 kelly = "kelly.cli:main"
-kelly-mcp = "kelly.mcp_server:main"
+# kelly-mcp intentionally disabled: Kelly is CLI-first to avoid resident
+# per-session MCP processes (the "ghost session" memory leak on the VPS). The
+# CLI mirrors every former MCP tool 1:1 over the same services/*. mcp_server.py
+# is kept in-tree so this is reversible — re-add the line to restore the server.
+# kelly-mcp = "kelly.mcp_server:main"
 
 [build-system]
 requires = ["poetry-core>=2.0,<3"]

@@ -1,5 +1,15 @@
 # Kelly + OpenClaw on a VPS
 
+> **⚠️ Deprecated path (MCP).** Kelly is now **CLI-first**: OpenClaw drives the
+> `kelly` command, not a resident `kelly-mcp` server. The stdio MCP spawned one
+> child process per session and leaked **ghost processes** (resident RAM) on the
+> VPS — the CLI runs and exits, so nothing stays resident. The `kelly-mcp`
+> entrypoint is disabled in `pyproject.toml` (kept in-tree, reversible). Current
+> setup: deploy the repo, `poetry install` (provides the `kelly` script), run
+> `patchright install chromium`, and let OpenClaw discover
+> `skills/kelly-travel-planner/SKILL.md` — **no MCP registration, no port, no
+> systemd service**. The MCP instructions below are retained for reference only.
+
 Kelly’s MCP server uses **stdio**: OpenClaw (or its gateway) **spawns** `kelly-mcp` as a child process. Kelly must live **on the same machine** as that process (same VPS/container namespace). You do **not** open a public TCP port for Kelly when using stdio.
 
 ## Scripted install (`curl | bash`, like OpenClaw’s installer)

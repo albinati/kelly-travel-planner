@@ -1,5 +1,11 @@
 # MCP host setup
 
+> **⚠️ Deprecated.** Kelly is now **CLI-first** — the `kelly-mcp` entrypoint is
+> disabled in `pyproject.toml` (kept in-tree, reversible). Use the `kelly` CLI
+> (every former tool has a `kelly <command>` mirror). This page is retained for
+> reference / if you re-enable the server. The OpenClaw integration is the
+> skill at `skills/kelly-travel-planner/SKILL.md`, which drives the CLI.
+
 Kelly ships a **stdio** MCP server: `kelly-mcp` (after `poetry install --extras mcp`). 4 tools + 1 resource — see [main README](../README.md) for the catalog.
 
 **Running OpenClaw on a VPS?** See [OPENCLAW-VPS.md](OPENCLAW-VPS.md) for clone, Poetry, absolute paths, `openclaw.json` example, and a **`curl | bash` installer** ([`scripts/install-openclaw-kelly.sh`](../scripts/install-openclaw-kelly.sh)).
