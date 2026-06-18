@@ -274,6 +274,40 @@ def avios_search(
     print(json.dumps(award_flight_result_to_jsonable(res), default=str))
 
 
+@app.command("cash-flight-search")
+def cash_flight_search(
+    origin_airports: str = typer.Argument(...),
+    destination_airports: str = typer.Argument(...),
+    outbound_date: str = typer.Argument(...),
+    adults: int = typer.Option(2, "--adults"),
+    children: int = typer.Option(0, "--children"),
+    cabin: str = typer.Option("economy", "--cabin"),
+    currency: str = typer.Option("GBP", "--currency"),
+    persist: bool = typer.Option(True, "--persist/--no-persist"),
+) -> None:
+    """Search cash (paid) one-way flights for a route + date via SerpApi."""
+    from kelly.services.cash_flight_service import (
+        cash_flight_result_to_jsonable,
+        search_cash_flights,
+    )
+
+    origins = [c.strip() for c in origin_airports.split(",") if c.strip()]
+    dests = [c.strip() for c in destination_airports.split(",") if c.strip()]
+    store = open_default_store() if persist else None
+    res = search_cash_flights(
+        origins,
+        dests,
+        outbound_date,
+        adults=adults,
+        children=children,
+        cabin=cabin,
+        currency=currency,
+        store=store,
+        persist=persist,
+    )
+    print(json.dumps(cash_flight_result_to_jsonable(res), default=str))
+
+
 @app.command("solve-itinerary")
 def solve_itinerary(
     origin_airports: str = typer.Argument(...),
@@ -565,6 +599,76 @@ def budget_compare(
         print(json.dumps({"error": "options_json must be a JSON array of options"}))
         return
     print(json.dumps(compare_options(options, target_currency=target_currency), default=str))
+
+
+# --- Value engine (cash-vs-Avios + points coverage) --------------------------
+
+
+@app.command("value-avios")
+def value_avios(
+    cash_amount: str = typer.Argument(...),
+    cash_currency: str = typer.Argument(...),
+    avios_points: int = typer.Argument(...),
+    avios_taxes_amount: str = typer.Option("0", "--avios-taxes-amount"),
+    avios_taxes_currency: str = typer.Option("GBP", "--avios-taxes-currency"),
+    target_currency: str = typer.Option("GBP", "--target-currency"),
+) -> None:
+    """Compute pence-per-Avios for a redemption and recommend cash vs Avios."""
+    from kelly.services.value_service import compute_avios_value
+
+    print(
+        json.dumps(
+            compute_avios_value(
+                cash_amount,
+                cash_currency,
+                avios_points,
+                avios_taxes_amount,
+                avios_taxes_currency,
+                target_currency,
+            ),
+            default=str,
+        )
+    )
+
+
+@app.command("check-award-coverage")
+def check_award_coverage_cmd(
+    avios_needed: int = typer.Argument(...),
+    profile_id: str = typer.Option("", "--profile-id"),
+    avios: int = typer.Option(0, "--avios"),
+    hsbc_points: int = typer.Option(0, "--hsbc-points"),
+    hsbc_to_avios: float = typer.Option(2.0, "--hsbc-to-avios"),
+    transfer_bonus_pct: float = typer.Option(0, "--transfer-bonus-pct"),
+) -> None:
+    """Check whether an Avios redemption can be covered from your balances."""
+    from kelly.services.value_service import check_award_coverage
+
+    print(
+        json.dumps(
+            check_award_coverage(
+                avios_needed,
+                profile_id=profile_id or None,
+                avios=avios,
+                hsbc_points=hsbc_points,
+                hsbc_to_avios=hsbc_to_avios,
+                transfer_bonus_pct=transfer_bonus_pct,
+            ),
+            default=str,
+        )
+    )
+
+
+@app.command("set-points-balances")
+def set_points_balances_cmd(
+    profile_id: str = typer.Argument(...),
+    avios: int = typer.Option(0, "--avios"),
+    hsbc: int = typer.Option(0, "--hsbc"),
+    hsbc_to_avios: float = typer.Option(2.0, "--hsbc-to-avios"),
+) -> None:
+    """Store your points balances on the traveller profile."""
+    from kelly.services.value_service import set_points_balances
+
+    print(json.dumps(set_points_balances(profile_id, avios, hsbc, hsbc_to_avios), default=str))
 
 
 # --- Hosting estimator -------------------------------------------------------
