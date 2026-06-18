@@ -50,6 +50,14 @@ def award_flight_key(
     )
 
 
+def cash_flight_key(
+    origin: str,
+    destination: str,
+    departure_date: str,
+) -> str:
+    return f"{origin.strip().upper()}|{destination.strip().upper()}|{departure_date.strip()}"
+
+
 @dataclass
 class TrainObservation:
     """One per train search call — captures the cheapest per-adult fare seen
@@ -217,6 +225,23 @@ class AwardFlightObservation:
     distance_mi: int | None
 
 
+@dataclass
+class CashFlightObservation:
+    """One per cash-flight option seen via SerpApi (Google Flights) — captures
+    the operating airline, the cash price + currency, the cabin, stop count and
+    total duration for a given origin + destination + departure_date."""
+
+    origin: str
+    destination: str
+    departure_date: str
+    airline: str | None
+    price_amount: float | None
+    price_currency: str | None
+    cabin: str
+    stops: int | None
+    duration_min: int | None
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS train_observations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -332,6 +357,23 @@ CREATE TABLE IF NOT EXISTS award_flight_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_award_trip_time
     ON award_flight_observations(trip_key, observed_at);
+
+CREATE TABLE IF NOT EXISTS cash_flight_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    observed_at TEXT NOT NULL,
+    trip_key TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    departure_date TEXT NOT NULL,
+    airline TEXT,
+    price_amount REAL,
+    price_currency TEXT,
+    cabin TEXT NOT NULL,
+    stops INTEGER,
+    duration_min INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_cash_flight_trip_time
+    ON cash_flight_observations(trip_key, observed_at);
 
 CREATE TABLE IF NOT EXISTS profiles (
     profile_id TEXT PRIMARY KEY,
@@ -543,6 +585,33 @@ class SqliteHistoryStore:
         with self._connect() as conn:
             cur = conn.execute(
                 f"INSERT INTO award_flight_observations ({','.join(cols)}) VALUES ({placeholders})",
+                values,
+            )
+            conn.commit()
+            return int(cur.lastrowid or 0)
+
+    def append_cash_flight(self, obs: CashFlightObservation) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        trip_key = cash_flight_key(obs.origin, obs.destination, obs.departure_date)
+        cols = [
+            "observed_at",
+            "trip_key",
+            "origin",
+            "destination",
+            "departure_date",
+            "airline",
+            "price_amount",
+            "price_currency",
+            "cabin",
+            "stops",
+            "duration_min",
+        ]
+        row = {**asdict(obs), "observed_at": now, "trip_key": trip_key}
+        values = [row[c] for c in cols]
+        placeholders = ",".join("?" * len(cols))
+        with self._connect() as conn:
+            cur = conn.execute(
+                f"INSERT INTO cash_flight_observations ({','.join(cols)}) VALUES ({placeholders})",
                 values,
             )
             conn.commit()

@@ -40,8 +40,17 @@ from kelly.services.award_flight_service import (
 )
 from kelly.services.booking_service import booking_total_for_leg, log_booking
 from kelly.services.budget_service import compare_options
+from kelly.services.cash_flight_service import (
+    cash_flight_result_to_jsonable,
+    search_cash_flights,
+)
 from kelly.services.fx_service import FxError, convert as fx_convert, fx_quote
 from kelly.services.hosting_service import estimate_hosting
+from kelly.services.value_service import (
+    check_award_coverage,
+    compute_avios_value,
+    set_points_balances,
+)
 from kelly.services.profile_service import (
     add_dream_trip as profile_add_dream_trip,
     get_profile as profile_get_profile,
@@ -296,6 +305,47 @@ def kelly_avios_search(
         persist=persist,
     )
     return json.dumps(award_flight_result_to_jsonable(res), default=str)
+
+
+@mcp.tool()
+def kelly_cash_flight_search(
+    origin_airports: str,
+    destination_airports: str,
+    outbound_date: str,
+    adults: int = 2,
+    children: int = 0,
+    cabin: str = "economy",
+    currency: str = "GBP",
+    persist: bool = True,
+) -> str:
+    """Search **cash** (paid) one-way flights for a route + date via SerpApi.
+
+    Uses SerpApi's Google Flights engine (broad coverage incl. low-cost
+    carriers). This is a one-way search — call it twice (out + back) and sum for
+    a round trip, mirroring ``kelly_avios_search``. Each option carries the cash
+    price, operating airline, departure/arrival times, stop count and duration;
+    options are sorted cheapest-first.
+
+    *origin_airports* / *destination_airports* are comma-separated IATA codes
+    (e.g. "LHR,LGW" → "CPH"); every pair is searched. ``cabin`` is one of
+    ``economy|premium|business|first``. Requires ``SERPAPI_API_KEY`` in .env;
+    returns ``{"error": "..."}`` JSON if it's missing.
+    """
+    origins = [c.strip() for c in origin_airports.split(",") if c.strip()]
+    dests = [c.strip() for c in destination_airports.split(",") if c.strip()]
+    store = open_default_store() if persist else None
+    res = search_cash_flights(
+        origins,
+        dests,
+        outbound_date,
+        adults=adults,
+        children=children,
+        cabin=cabin,
+        currency=currency,
+        store=store,
+        persist=persist,
+    )
+    return json.dumps(cash_flight_result_to_jsonable(res), default=str)
 
 
 @mcp.tool()
@@ -618,6 +668,98 @@ def kelly_budget_compare(options_json: str, target_currency: str = "GBP") -> str
     if not isinstance(options, list):
         return json.dumps({"error": "options_json must be a JSON array of options"})
     return json.dumps(compare_options(options, target_currency=target_currency), default=str)
+
+
+# --- Value engine (cash-vs-Avios + points coverage) -------------------------
+
+
+@mcp.tool()
+def kelly_value_avios(
+    cash_amount: str,
+    cash_currency: str,
+    avios_points: int,
+    avios_taxes_amount: str = "0",
+    avios_taxes_currency: str = "GBP",
+    target_currency: str = "GBP",
+) -> str:
+    """Compute the cash value of an Avios redemption and recommend cash vs Avios.
+
+    Pass the **real** cash fare (``cash_amount`` in ``cash_currency``) and the
+    Avios price you'd actually pay (``avios_points`` + ``avios_taxes_amount`` in
+    ``avios_taxes_currency`` — the cash taxes/fees on the award). The Avios number
+    is a direct input (from ba.com), NOT the short-haul RFS estimate.
+
+    Computes ``pence_per_avios = (cash − taxes, both in target) / avios_points ×
+    100`` and a recommendation: ``"cash"`` below 1.0p/Avios, ``"avios"`` above
+    ~1.5p/Avios, ``"equivalent"`` between. ``cash_amount`` / ``avios_taxes_amount``
+    are strings to preserve Decimal precision.
+
+    Returns JSON ``{cash, avios, value_metrics:{pence_per_avios, recommendation},
+    warnings}`` or ``{"error": ...}`` if ``avios_points <= 0``.
+    """
+    return json.dumps(
+        compute_avios_value(
+            cash_amount,
+            cash_currency,
+            avios_points,
+            avios_taxes_amount,
+            avios_taxes_currency,
+            target_currency,
+        ),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_check_award_coverage(
+    avios_needed: int,
+    profile_id: str = "",
+    avios: int = 0,
+    hsbc_points: int = 0,
+    hsbc_to_avios: float = 2.0,
+    transfer_bonus_pct: float = 0,
+) -> str:
+    """Check whether an Avios redemption can be covered from your balances.
+
+    Computes how many Avios you have available — your ``avios`` balance plus
+    convertible HSBC Reward points (``hsbc_as_avios = floor(hsbc_points /
+    hsbc_to_avios × (1 + transfer_bonus_pct/100))``) — and whether that covers
+    ``avios_needed``, plus any shortfall.
+
+    Pass ``profile_id`` to read balances from the stored profile's
+    ``points_balances`` block (set via ``kelly_set_points_balances``); explicit
+    args fill any gaps. Returns JSON ``{avios_needed, available:{...}, can_cover,
+    shortfall}``.
+    """
+    return json.dumps(
+        check_award_coverage(
+            avios_needed,
+            profile_id=profile_id or None,
+            avios=avios,
+            hsbc_points=hsbc_points,
+            hsbc_to_avios=hsbc_to_avios,
+            transfer_bonus_pct=transfer_bonus_pct,
+        ),
+        default=str,
+    )
+
+
+@mcp.tool()
+def kelly_set_points_balances(
+    profile_id: str,
+    avios: int,
+    hsbc: int = 0,
+    hsbc_to_avios: float = 2.0,
+) -> str:
+    """Store your points balances on the traveller profile.
+
+    Merges a ``points_balances`` block — ``{avios, hsbc, conversions:
+    {hsbc_to_avios}, updated_at}`` — into the profile's ``payload_json`` (the
+    rest of the payload is preserved). ``kelly_check_award_coverage`` reads it
+    back when given a ``profile_id``. Returns the stored profile or
+    ``{"error": ...}``.
+    """
+    return json.dumps(set_points_balances(profile_id, avios, hsbc, hsbc_to_avios), default=str)
 
 
 # --- Hosting estimator ------------------------------------------------------
