@@ -308,6 +308,36 @@ def cash_flight_search(
     print(json.dumps(cash_flight_result_to_jsonable(res), default=str))
 
 
+@app.command("hotel-search")
+def hotel_search(
+    query: str = typer.Argument(...),
+    check_in: str = typer.Argument(...),
+    check_out: str = typer.Argument(...),
+    adults: int = typer.Option(2, "--adults"),
+    children: int = typer.Option(0, "--children"),
+    currency: str = typer.Option("GBP", "--currency"),
+    persist: bool = typer.Option(True, "--persist/--no-persist"),
+) -> None:
+    """Search real hotel rates for a destination + date range via SerpApi."""
+    from kelly.services.hotel_search_service import (
+        hotel_search_result_to_jsonable,
+        search_hotels,
+    )
+
+    store = open_default_store() if persist else None
+    res = search_hotels(
+        query,
+        check_in,
+        check_out,
+        adults=adults,
+        children=children,
+        currency=currency,
+        store=store,
+        persist=persist,
+    )
+    print(json.dumps(hotel_search_result_to_jsonable(res), default=str))
+
+
 @app.command("solve-itinerary")
 def solve_itinerary(
     origin_airports: str = typer.Argument(...),
