@@ -44,7 +44,7 @@ from kelly.services.fx_service import FxError, convert
 # Recognised line ``kind`` values for the by_kind breakdown. Unknown kinds are
 # accepted but bucketed under "other" so a typo never silently drops money.
 _KNOWN_KINDS: frozenset[str] = frozenset(
-    {"transport", "stay", "experience", "car", "local", "other"}
+    {"transport", "stay", "experience", "car", "local", "package", "other"}
 )
 
 _CENTS = Decimal("0.01")

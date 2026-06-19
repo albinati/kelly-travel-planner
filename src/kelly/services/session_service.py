@@ -35,6 +35,7 @@ _VALID_KIND = {
     "experience",
     "car",
     "local",
+    "package",
     "other",
 }
 

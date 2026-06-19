@@ -46,6 +46,10 @@ from kelly.services.cash_flight_service import (
 )
 from kelly.services.fx_service import FxError, convert as fx_convert, fx_quote
 from kelly.services.hosting_service import estimate_hosting
+from kelly.services.hotel_search_service import (
+    hotel_search_result_to_jsonable,
+    search_hotels,
+)
 from kelly.services.value_service import (
     check_award_coverage,
     compute_avios_value,
@@ -346,6 +350,43 @@ def kelly_cash_flight_search(
         persist=persist,
     )
     return json.dumps(cash_flight_result_to_jsonable(res), default=str)
+
+
+@mcp.tool()
+def kelly_hotel_search(
+    query: str,
+    check_in: str,
+    check_out: str,
+    adults: int = 2,
+    children: int = 0,
+    currency: str = "GBP",
+    persist: bool = True,
+) -> str:
+    """Search **real** hotel rates for a destination + date range via SerpApi.
+
+    Uses SerpApi's Google Hotels engine — real, multi-source pricing (incl.
+    Expedia/Booking) per night and per stay. ``query`` is a free-text
+    destination (e.g. "Copenhagen" or a specific hotel name); ``check_in`` /
+    ``check_out`` are ISO dates. Each option carries ``rate_per_night`` and the
+    all-in ``total_rate`` (used to build a DIY flight+hotel total to compare
+    against a captured package); options are sorted by total cheapest-first.
+
+    Requires ``SERPAPI_API_KEY`` in .env; returns ``{"error": "..."}`` JSON if
+    it's missing. LiteAPI (``kelly_plan_trip``'s hotel leg) stays dormant — this
+    is the real-price path.
+    """
+    store = open_default_store() if persist else None
+    res = search_hotels(
+        query,
+        check_in,
+        check_out,
+        adults=adults,
+        children=children,
+        currency=currency,
+        store=store,
+        persist=persist,
+    )
+    return json.dumps(hotel_search_result_to_jsonable(res), default=str)
 
 
 @mcp.tool()
@@ -1075,7 +1116,9 @@ def kelly_session_attach_option(
 ) -> str:
     """Append a dated option snapshot to a session; return the created snapshot.
 
-    ``kind`` ∈ ``cash_flight|avios|train|stay|experience|car|local|other``.
+    ``kind`` ∈ ``cash_flight|avios|train|stay|experience|car|local|package|other``
+    (``package`` = a captured flight+hotel bundle: ``amount``/``currency`` is the
+    bundle total, ``source`` the vendor, ``payload_json`` the components/times).
     ``amount`` (+ ``currency``) is the cash price — leave blank for avios-only
     options. ``avios_points`` is a **separate currency**, reported but never folded
     into cash. ``source`` records provenance (``serpapi|seats_aero|eurostar|
